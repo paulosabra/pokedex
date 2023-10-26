@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:pokedex/bloc/pokemon_bloc.dart';
 import 'package:pokedex/pokemon_model.dart';
-import 'package:pokedex/pokemon_service.dart';
-import 'package:pokedex/resource_list_model.dart';
 
 class PokemonScreen extends StatefulWidget {
   const PokemonScreen({super.key});
@@ -11,14 +11,6 @@ class PokemonScreen extends StatefulWidget {
 }
 
 class _PokemonScreenState extends State<PokemonScreen> {
-  late final Future<ResourceListModel?> futurePokemon;
-
-  @override
-  void initState() {
-    super.initState();
-    futurePokemon = fetchPokemonList();
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -37,33 +29,51 @@ class _PokemonScreenState extends State<PokemonScreen> {
       body: SafeArea(
         child: Container(
           padding: const EdgeInsets.all(16),
-          child: FutureBuilder(
-            future: futurePokemon,
-            builder: ((context, snapshot) {
-              if (snapshot.hasData) {
-                var resource = snapshot.data;
-                return PokemonPage(pokemons: resource?.results);
-              }
-
-              if (snapshot.hasError) {
-                return const Center(
-                  child: Text(
-                    'Erro na Requisição',
-                    style: TextStyle(
+          child: BlocProvider(
+            create: (context) => PokemonBloc()..add(GetPokemonListEvent()),
+            child: BlocBuilder<PokemonBloc, PokemonState>(
+              builder: (context, state) {
+                if (state is PokemonLoading) {
+                  return const Center(
+                    child: CircularProgressIndicator(
                       color: Colors.white,
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
                     ),
-                  ),
-                );
-              }
+                  );
+                }
 
-              return const Center(
-                child: CircularProgressIndicator(
-                  color: Colors.white,
-                ),
-              );
-            }),
+                if (state is PokemonError) {
+                  return Center(
+                    child: Text(
+                      state.error,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 32,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  );
+                }
+
+                if (state is PokemonEmptyList) {
+                  return const Center(
+                    child: Text(
+                      'Lista Vazia',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 32,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  );
+                }
+
+                if (state is PokemonSuccess) {
+                  return PokemonPage(pokemons: state.data);
+                }
+
+                return const SizedBox();
+              },
+            ),
           ),
         ),
       ),
