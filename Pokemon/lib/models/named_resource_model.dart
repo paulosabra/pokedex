@@ -6,11 +6,18 @@ class NamedResourceModel {
     this.name,
     this.url,
   });
-}
 
-/*
-{
-  "name": "poison",
-  "url": "https://pokeapi.co/api/v2/type/4/"
+  Map<String, dynamic> toJson() {
+    return {
+      'name': name,
+      'url': url,
+    };
+  }
+
+  factory NamedResourceModel.fromJson(Map<String, dynamic> json) {
+    return NamedResourceModel(
+      name: json['name'] != null ? json['name'] as String : null,
+      url: json['url'] != null ? json['url'] as String : null,
+    );
+  }
 }
-*/
