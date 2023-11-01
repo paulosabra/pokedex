@@ -10,12 +10,22 @@ class PokemonStatModel {
     this.effort,
     this.stat,
   });
-}
 
-/*
-{
-  "base_stat": 45,
-  "effort": 0,
-  "stat": {}
+  Map<String, dynamic> toJson() {
+    return {
+      'baseStat': baseStat,
+      'effort': effort,
+      'stat': stat != null ? stat!.toJson() : null,
+    };
+  }
+
+  factory PokemonStatModel.fromJson(Map<String, dynamic> json) {
+    return PokemonStatModel(
+      baseStat: json['baseStat'] != null ? json['baseStat'] as int : null,
+      effort: json['effort'] != null ? json['effort'] as int : null,
+      stat: json['stat'] != null
+          ? NamedResourceModel.fromJson(json['stat'])
+          : null,
+    );
+  }
 }
-*/
