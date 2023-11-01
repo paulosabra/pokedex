@@ -1,8 +1,13 @@
+import 'package:equatable/equatable.dart';
+import 'package:json_annotation/json_annotation.dart';
 import 'package:pokemon/models/pokemon_sprites_model.dart';
 import 'package:pokemon/models/pokemon_stat_model.dart';
 import 'package:pokemon/models/pokemon_type_model.dart';
 
-class PokemonModel {
+part 'pokemon_model.g.dart';
+
+@JsonSerializable()
+class PokemonModel extends Equatable {
   final int? id;
   final String? name;
   final int? height;
@@ -11,7 +16,7 @@ class PokemonModel {
   final List<PokemonTypeModel>? types;
   final PokemonSpritesModel? sprites;
 
-  PokemonModel({
+  const PokemonModel({
     this.id,
     this.name,
     this.height,
@@ -20,7 +25,24 @@ class PokemonModel {
     this.types,
     this.sprites,
   });
+
+  factory PokemonModel.fromJson(Map<String, dynamic> json) =>
+      _$PokemonModelFromJson(json);
+
+  Map<String, dynamic> toJson() => _$PokemonModelToJson(this);
+
+  @override
+  List<Object?> get props => [
+        id,
+        name,
+        height,
+        weight,
+        stats,
+        types,
+        sprites,
+      ];
 }
+
 
 /*
 {
