@@ -1,0 +1,9 @@
+{
+    "configurations": [
+        {
+            "name": "Pokemon",
+            "type": "dart",
+            "request": "launch",
+        }
+    ]
+}
