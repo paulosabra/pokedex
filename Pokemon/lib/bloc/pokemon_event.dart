@@ -6,3 +6,9 @@ sealed class PokemonEvent extends Equatable {
   @override
   List<Object> get props => [];
 }
+
+class GetPokemonEvent extends PokemonEvent {
+  final int id;
+
+  const GetPokemonEvent(this.id);
+}

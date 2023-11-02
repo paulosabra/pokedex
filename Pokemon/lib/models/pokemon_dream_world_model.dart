@@ -6,11 +6,21 @@ class PokemonDreamWorldModel {
     this.frontDefault,
     this.frontFemale,
   });
-}
 
-/*
-{
-  "front_default": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/dream-world/1.svg",
-  "front_female": null
+  Map<String, dynamic> toJson() {
+    return {
+      'front_default': frontDefault,
+      'front_female': frontFemale,
+    };
+  }
+
+  factory PokemonDreamWorldModel.fromJson(Map<String, dynamic> json) {
+    return PokemonDreamWorldModel(
+      frontDefault: json['front_default'] != null
+          ? json['front_default'] as String
+          : null,
+      frontFemale:
+          json['front_female'] != null ? json['front_female'] as String : null,
+    );
+  }
 }
-*/

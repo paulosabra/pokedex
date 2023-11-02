@@ -6,10 +6,18 @@ class PokemonOtherSpritesModel {
   PokemonOtherSpritesModel({
     this.dreamWorld,
   });
-}
 
-/*
-{
-  "dream_world": {}
+  Map<String, dynamic> toJson() {
+    return {
+      'dream_world': dreamWorld != null ? dreamWorld!.toJson() : null,
+    };
+  }
+
+  factory PokemonOtherSpritesModel.fromJson(Map<String, dynamic> json) {
+    return PokemonOtherSpritesModel(
+      dreamWorld: json['dream_world'] != null
+          ? PokemonDreamWorldModel.fromJson(json['dream_world'])
+          : null,
+    );
+  }
 }
-*/
