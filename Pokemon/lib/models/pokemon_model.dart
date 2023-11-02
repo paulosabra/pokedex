@@ -20,16 +20,42 @@ class PokemonModel {
     this.types,
     this.sprites,
   });
-}
 
-/*
-{
-  "id": 1,
-  "name": "bulbasaur",
-  "height": 7,
-  "weight": 69,
-  "stats": [],
-  "types": [],
-  "sprites": {}
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'name': name,
+      'height': height,
+      'weight': weight,
+      'stats': stats != null
+          ? List<PokemonStatModel>.from(stats!.map((item) => item.toJson()))
+          : [],
+      'types': types != null
+          ? List<PokemonTypeModel>.from(types!.map((item) => item.toJson()))
+          : [],
+      'sprites': sprites != null ? sprites!.toJson() : null,
+    };
+  }
+
+  factory PokemonModel.fromJson(Map<String, dynamic> json) {
+    return PokemonModel(
+      id: json['id'] != null ? json['id'] as int : null,
+      name: json['name'] != null ? json['name'] as String : null,
+      height: json['height'] != null ? json['height'] as int : null,
+      weight: json['weight'] != null ? json['weight'] as int : null,
+      stats: json['stats'] != null
+          ? List<PokemonStatModel>.from(
+              json['stats']!.map((item) => PokemonStatModel.fromJson(item)),
+            )
+          : [],
+      types: json['types'] != null
+          ? List<PokemonTypeModel>.from(
+              json['types']!.map((item) => PokemonTypeModel.fromJson(item)),
+            )
+          : [],
+      sprites: json['sprites'] != null
+          ? PokemonSpritesModel.fromJson(json['sprites'])
+          : null,
+    );
+  }
 }
-*/
