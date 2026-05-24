@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - "epic/**"
+      - develop
+      - main
+  push:
+    branches:
+      - "epic/**"
+      - develop
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          # Tracks the latest stable SDK. Package resolution is pinned by the
+          # committed pubspec.lock; if a future stable breaks resolution, pin the
+          # SDK here instead, e.g.:
+          #   flutter-version: 3.44.0
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Generated code is git-ignored, so a fresh clone must regenerate before
+      # analyze/test. This also validates that the codegen builder graph instantiates.
+      - name: Generate code
+        run: dart run build_runner build
+
+      - name: Verify formatting
+        run: dart format --set-exit-if-changed .
+
+      - name: Analyze
+        run: flutter analyze --fatal-infos --fatal-warnings
+
+      - name: Run tests
+        run: flutter test --coverage
