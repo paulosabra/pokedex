@@ -1,7 +1,7 @@
 ---
-title: "Code Simplicity / YAGNI Review — PR2 (feature/data-part2)"
+title: "Code Simplicity / YAGNI Review — PR3 (feature/data-part3)"
 date: 2026-05-25
-scope: "lib/core/database/{app_database,cache_policy}.dart, lib/features/pokemon/domain/entities/{sort_criteria,pokemon_filter}.dart, lib/features/pokemon/data/summary_encoding.dart, lib/features/pokemon/data/datasources/{pokemon_local_data_source,pokemon_dao}.dart, test/features/pokemon/**"
+scope: "lib/features/pokemon/domain/entities/*.dart, lib/features/pokemon/domain/repositories/pokemon_repository.dart, lib/features/pokemon/data/mappers/*.dart, lib/features/pokemon/data/repositories/pokemon_repository_impl.dart, test/**"
 reviewer: claude-sonnet-4-6 (simplicity agent)
 ---
 
@@ -9,157 +9,136 @@ reviewer: claude-sonnet-4-6 (simplicity agent)
 
 ### Core Purpose
 
-PR2 delivers the local/cache stack for the Pokémon data layer: a Drift SQLite database with four
-cache tables, a DAO implementing the offline search/filter/sort/watch query, and two domain value
-objects (`SortCriteria`, `PokemonFilter`) that the DAO consumes. It must be completable without PR1
-or PR3 and must not introduce any speculative generality.
+PR3 introduces (a) nine pure-Dart Freezed domain entities and the `PokemonRepository` interface, (b) six pure-function mappers converting DTOs to entities and entities to cache rows, and (c) a cache-first/SWR `PokemonRepositoryImpl` that composes five PokéAPI endpoints and orchestrates a Drift local cache. Tests must reach 100% mapper coverage and full decision-branch coverage for the repository.
 
 ---
 
 ### Unnecessary Complexity Found
 
-**1. `pokemon_filter_test.dart` — Freezed contract tests duplicate generated guarantees**
+#### 1. `_tryParse` catches `FormatException` only — `TypeError` from valid-JSON-wrong-shape escapes uncaught
 
-`test/features/pokemon/domain/entities/pokemon_filter_test.dart` (lines 15–36) contains three tests:
-
-- `'value equality holds for identical filters'` — asserts `==` and `hashCode`. Freezed generates
-  both; this test verifies the code generator, not application logic.
-- `'copyWith overrides selected fields only'` — asserts the generated `copyWith`. Same: this is
-  Freezed's contract.
-- `'defaults to empty type/weakness sets and no height'` — this one tests a concrete design
-  decision (the `@Default` values) and is genuinely useful.
-
-The generated-contract tests add no confidence in application behavior and will never catch a
-regression (they would only fail if Freezed itself regressed). At 100-line scale they are noise;
-at larger scale they multiply maintenance cost.
-
-**2. `summary_encoding_test.dart` — third assertion in `typeWeaknessMask` is partially tautological**
-
-`test/features/pokemon/data/summary_encoding_test.dart`, lines 38–41 (the `'multiple types OR
-their bits together'` test):
+**File:** `lib/features/pokemon/data/repositories/pokemon_repository_impl.dart` lines 262–267
 
 ```dart
-expect(mask & typeWeaknessMask({PokemonTypeId.grass}), isNonZero);
-expect(mask & typeWeaknessMask({PokemonTypeId.fire}), isNonZero);
-expect(mask & typeWeaknessMask({PokemonTypeId.water}), 0);
+T? _tryParse<T>(T Function() parse) {
+  try {
+    return parse();
+  } on FormatException {
+    return null;
+  }
+}
 ```
 
-The first two sub-assertions are proven by the prior line `expect(mask, 1 | 4)`. If `mask == 5`
-(which has already been asserted), then `mask & 1 != 0` and `mask & 4 != 0` are arithmetic
-identities — they cannot fail unless the first `expect` also fails. They add no incremental
-coverage. The third sub-assertion (`water == 0`) is independently useful and should be kept.
+`pokemonFromRow` / `detailFromRow` call `jsonDecode(row.payloadJson) as Map<String, dynamic>`. If `payloadJson` is valid JSON but not an object (e.g. `"[]"`, `"42"`, `"null"`), `jsonDecode` succeeds but the `as` cast throws `TypeError`, which is *not* a subtype of `FormatException`. `TypeError` then propagates uncaught out of `getPokemonDetail`, turning what should be a `CacheFailure` or a miss into an unhandled exception.
 
-**3. `app_database.dart` — `migration` property boilerplate can be omitted**
+The same narrow catch appears in `_readSummaries` (line 173) for the search/filter path.
 
-`lib/core/database/app_database.dart`, lines 110–111:
+Both test cases for corrupt cache (`payloadJson: 'not-json'`) exercise only the `FormatException` arm. There is no test with `payloadJson: '[]'` or `payloadJson: '42'` to confirm `TypeError` is handled.
 
-```dart
-@override
-MigrationStrategy get migration =>
-    MigrationStrategy(onCreate: (m) => m.createAll());
-```
-
-`MigrationStrategy(onCreate: (m) => m.createAll())` is Drift's own default when no custom migration
-is provided on a fresh schema. Overriding it explicitly with the identical default value adds three
-lines that could mislead a reader into thinking a custom decision was made here.
-
-**Note:** This is a borderline call — keeping it is defensible as an explicit "yes, we checked this
-deliberately" signal, and it harms nothing. Flagged as a suggestion only.
-
-**4. `pokemon_dao_test.dart` — `detail / evolution / type relations round-trip` test (lines 102–129) packs three independent concerns into one test**
-
-The single test `'detail / evolution / type relations round-trip'` upserts a detail, an evolution
-chain, and a type relation in one `test()` block, then asserts all three read-backs plus one
-null-miss. This is not a simplicity violation per se, but it mixes failure locality: if
-`upsertDetail` fails, the evolution and type assertions never run, and the error message does not
-name the failing concern. Splitting into three focused tests would cost ~15 lines and sharpen
-failure messages. This is a suggestion, not a blocker.
+**Fix:** widen the catch to `on Object` (matching `_revalidateDetail`'s own pattern) or at minimum `on Exception`.
 
 ---
 
 ### Code to Remove
 
-| Location | Reason | Estimated LOC |
-|---|---|---|
-| `test/…/pokemon_filter_test.dart` lines 15–36 | Two tests verify Freezed's own generated contract (`==`, `hashCode`, `copyWith`), not application logic | ~22 LOC |
-| `test/…/summary_encoding_test.dart` lines 38–40 | Two sub-assertions inside `'multiple types OR…'` are arithmetic identities given the immediately preceding `expect(mask, 1 \| 4)` | ~2 LOC |
-| `lib/core/database/app_database.dart` lines 110–111 | Explicit override of Drift's own default `MigrationStrategy`; adds noise, removes nothing | ~3 LOC (optional) |
+No significant dead code or unused abstractions were found.
 
-Total removable: ~24 LOC (critical/important) + 3 LOC (optional suggestion).
+The `_statLabels` constant in `pokemon_detail_mapper.dart` (lines 13–20) is a private map used exactly once in `_evYield`. It is small and its purpose is clear where it sits; moving it inline would make the `_evYield` function harder to read and is not a simplification gain. **No removal recommended.**
 
 ---
 
 ### Simplification Recommendations
 
-#### 1. Remove the two Freezed-contract tests from `pokemon_filter_test.dart`
+#### 1. `_tryParse`: widen exception catch (Critical)
 
-- **Current:** Three tests; two assert `==`/`hashCode`/`copyWith` behavior generated by Freezed.
-- **Proposed:** Retain only `'defaults to empty type/weakness sets and no height'`. Drop
-  `'value equality holds for identical filters'` and `'copyWith overrides selected fields only'`.
-- **Impact:** ~22 LOC removed; test suite tests application behavior, not the code generator.
+- **Current:** `on FormatException`
+- **Proposed:** `on Object` (or `on Exception`)
+- **Impact:** closes the `TypeError` escape hatch at zero LOC cost; aligns with `_revalidateDetail`'s existing `on Object` pattern. Apply the same fix to `_readSummaries` (line 173).
 
-#### 2. Remove the tautological sub-assertions in `typeWeaknessMask` test
+#### 2. `PokemonFilter` defaults test is tautological (Important)
 
-- **Current:** After asserting `expect(mask, 1 | 4)`, two further assertions confirm `mask & 1`
-  and `mask & 4` are non-zero — both are implied by the prior assertion.
-- **Proposed:** Keep `expect(mask, 1 | 4)` and the `water == 0` check; remove lines 38–40.
-- **Impact:** ~2 LOC removed; test reads as a single, non-redundant assertion.
+**File:** `test/features/pokemon/domain/entities/pokemon_filter_test.dart`
 
-#### 3. (Optional) Remove the explicit `migration` override in `AppDatabase`
+The single test verifies that `PokemonFilter()` has empty `types`, empty `weaknesses`, and `null` height. These are exactly the `@Default` values already checked by the Freezed generator at codegen time. The in-test comment says "the DAO relies on these defaults", which is a real coupling constraint — but the right place to assert that coupling is in the DAO's own filter tests (which already exist in `pokemon_dao_test.dart` and exercise the no-filter-active path). This test adds no new invariant and cannot fail unless a developer manually removes the `@Default` annotations.
 
-- **Current:** Overrides `MigrationStrategy` with Drift's default value.
-- **Proposed:** Delete lines 110–111 entirely; Drift uses `MigrationStrategy(onCreate: (m) =>
-  m.createAll())` by default when no override is present.
-- **Impact:** 3 LOC removed; the class shrinks to its essential declaration.
+- **Current:** one group, one test, 15 lines
+- **Proposed:** delete the file; the DAO tests already guard the defaults in context
+- **Impact:** -15 LOC; reduces the set of tests that must be maintained when entity shape changes
+
+#### 3. `_MockConnectivity` uses a behaviour mock where a value stub is sufficient (Suggestion)
+
+**File:** `test/features/pokemon/data/repositories/pokemon_repository_impl_test.dart` lines 34, 40, 65–67, 91
+
+The plan specifies "fake Connectivity (StreamController)" (plan L584). What was implemented is a mocktail `Mock` with `thenAnswer` stubs — `goOnline()` and `goOffline()` convenience helpers. This is not incorrect and the test reads well, but it bypasses VGV's stated fakes-not-mocks convention and links the test to mocktail's invocation matching machinery unnecessarily. For a simple synchronous boolean result, a plain hand-written fake (a tiny class with a settable `_online` flag) would be shorter and have no mocking overhead.
+
+- **Current:** `_MockConnectivity extends Mock`, two `when().thenAnswer()` stubs
+- **Proposed:** `class _FakeConnectivity implements Connectivity { bool isOnline = true; ... }`
+- **Impact:** eliminates mocktail dependency for connectivity; aligns with plan and VGV convention; roughly even LOC, clarity gain
+
+#### 4. `composedDetail()` test helper uses empty type effectiveness (Suggestion)
+
+**File:** `test/features/pokemon/data/repositories/pokemon_repository_impl_test.dart` lines 79–84
+
+```dart
+PokemonDetail composedDetail() => pokemonDetailFromDtos(
+  pokemon: pokemonDto,
+  species: speciesDto,
+  effectiveness: computeTypeEffectiveness(const [], const {}),
+  encounters: const [],
+);
+```
+
+This produces a `PokemonDetail` with empty `weaknesses` and `typeDefenses`. When it is used to seed the "fresh cache hit" and "stale cache" tests, the cached entity has different type data than what the repository's actual `_composeDetail` would produce (which computes effectiveness from real type DTOs via `_ensureAllTypeRelations` or `_relationFor`). The tests pass because they do not assert on weakness/type-defense equality, but the seeded detail is not representative of what the code produces in production. Passing `computeTypeEffectiveness(pokemonDto.types.map(...), ...)` or a realistic `TypeEffectiveness` constant would make the fixture accurate without adding complexity.
+
+- **Impact:** test fidelity improvement; ~5 LOC change
+
+#### 5. Evolution `timeOfDay` and `location` condition branches lack test coverage (Suggestion)
+
+**File:** `test/features/pokemon/data/mappers/evolution_mapper_test.dart`
+
+`_conditionFrom` in `evolution_mapper.dart` has six condition branches: `minLevel`, `item`, `trade`, `minHappiness`, `heldItem`, `knownMove`, `timeOfDay`, `location`. Tests cover `minLevel` (Bulbasaur fixture), `item` (Vaporeon via Eevee fixture), `trade` (plan mentions it), `heldItem` (Gliscor in inline test), `knownMove` (Sylveon in inline test). The `timeOfDay` and `location` branches (lines 40–43) are not exercised by any test case. Since 100% branch coverage is claimed for mappers, these constitute missed coverage.
+
+- **Proposed:** add two inline `EvolutionDetailDto` cases — one with `timeOfDay: 'night'` (asserts `'During night'`) and one with `location: NamedApiResourceDto(name: 'mt-moon', ...)` (asserts `'At mt moon'`)
+- **Impact:** ~20 LOC; closes the 100% coverage claim honestly
+
+#### 6. Stale `getEvolutionChain` path is present in code but not tested (Suggestion)
+
+**File:** `lib/features/pokemon/data/repositories/pokemon_repository_impl.dart` lines 127–133; `test/features/pokemon/data/repositories/pokemon_repository_impl_test.dart`
+
+`getEvolutionChain` checks `_isFresh` and serves the cache only if fresh. There is no test for the stale-chain path (stale cached chain → refetch and re-upsert). The "serves a fresh cached chain" test exists, but no "stale cached chain → network refetch" test. This leaves an untested branch in a method that is otherwise described as fully branch-covered.
+
+- **Proposed:** add a test seeding a chain with `updatedAt: daysAgo(400)` and verify `fetchEvolutionChain` is called
+- **Impact:** ~15 LOC; closes the coverage gap
 
 ---
 
 ### YAGNI Violations
 
-None found. Every construct in PR2 serves a current PR2 or documented PR3 requirement:
+None found. Every interface, abstraction, and helper serves its documented purpose:
 
-- `PokemonLocalDataSource` interface — DIP for repository testability in PR3 (stated in plan and
-  prompt scope notes; not speculative).
-- `summary_encoding.dart` (`normalizeName` + `typeWeaknessMask`) — consumed by the DAO now and by
-  the PR3 cache mapper; extracted for sharing, not speculation.
-- `_summaryQuery` private method — shared by `querySummaries` and `watchSummaries`, satisfying the
-  rule-of-three.
-- `HeightCategory` in `pokemon_filter.dart` — all three cases (`short`, `medium`, `tall`) map
-  directly to the `_heightPredicate` switch in `pokemon_dao.dart`; none is unused.
-- `kStaticDataTtl` alongside `kPokemonCacheTtl` — the TypeRelations rows have a documented
-  different TTL (plan §T-13); two constants are the correct encoding.
-- `AppDatabase.forTesting` named constructor — used immediately in `pokemon_dao_test.dart`.
-- `_shortMaxDecimetres` / `_tallMinDecimetres` constants in the DAO — single-use but the named
-  constant is more readable than the magic integers `10` / `20` in a height-predicate switch.
-- Web WASM assets (`sqlite3.wasm`, `drift_worker.js`) and the `_openConnection()` factory — both
-  required by T-09 acceptance (validated on a real web target). Not speculative.
-
----
-
-### Notable strengths
-
-- The DAO is clean and un-layered: no base class, no generic repository helper, no command/query
-  objects. The `_summaryQuery` extraction is minimal and earns its keep.
-- `summary_encoding.dart` is a pure-function module with no state — trivially testable and correctly
-  scoped.
-- `cache_policy.dart` is two named constants and nothing more. Ideal.
-- `sort_criteria.dart` is a plain enum with no methods — exactly the right amount of code for a
-  value whose behavior lives in the DAO switch.
-- `AppDatabase.forTesting` is a minimal test seam; it does not introduce a factory pattern, a DI
-  abstraction, or a mock database.
-- The DAO test suite is behavior-driven: it tests search semantics (partial, case, accent, leading
-  zeros), filter semantics (intersection, zero result), sort semantics (all four orderings), and the
-  reactive stream. No test asserts internal implementation details.
+- The `PokemonRepository` abstract interface has a named consumer (T-16 use case + Evolution tab T-26, recorded in the plan).
+- `_tryFetch` / `_tryParse` / `_isFresh` / `_isOnline` / `_relationFor` / `_ensureAllTypeRelations` / `_composeDetail` / `_revalidateDetail` are each called from multiple sites (confirmed by reading the implementation).
+- The `TypeEffectiveness` value class bundles three co-computed outputs that are always needed together; it is not a premature abstraction.
+- The `pokeApiTypeIds` constant is used both in `_relationFor` (type id → fetch URL) and tested explicitly; it is not speculative.
+- Inline SWR per method (no generic helper) is the correct call for rule-of-three discipline at this stage.
+- Pure-function mapper grouping is VGV convention; the six mapper files map cleanly to the six mapper domains.
 
 ---
 
 ### Final Assessment
 
-Total potential LOC reduction: ~2–3% of PR2 test lines (24–27 LOC of ~370 test LOC).
+**Total potential LOC reduction:** ~30 lines (tautological test removal + test additions wash each other out; net is small)
 
-Complexity score: **Low** — this is a well-scoped PR with minimal abstraction and no premature
-generality. The source files are uniformly minimal.
+**Complexity score:** Low — the codebase is well-structured, minimalist, and closely follows the plan.
 
-Recommended action: **Proceed with simplifications** — the two important issues (Freezed-contract
-tests and tautological assertions) are quick removals. The optional suggestion (`migration`
-override) can be left to the author's preference.
+**Critical issue (1):** `_tryParse` / `_readSummaries` catching `FormatException` only lets `TypeError` escape for valid-JSON-wrong-shape payloads. Widen to `on Object` or `on Exception` before merge.
+
+**Important issue (1):** `PokemonFilter` defaults test is tautological and should be deleted; the invariant is already guarded by DAO tests.
+
+**Suggestions (4):**
+1. Replace `_MockConnectivity` with a hand-written fake to align with VGV fakes-not-mocks and the plan's spec.
+2. Make `composedDetail()` use realistic type effectiveness so seeded cache data reflects production output.
+3. Add `timeOfDay` and `location` evolution condition tests to close the 100% coverage claim for `evolution_mapper.dart`.
+4. Add a stale-chain test for `getEvolutionChain` to close its branch-coverage gap.
+
+**Recommended action:** Proceed with simplifications — one bug fix required (critical); one test removal (important); four test improvements (suggestions).

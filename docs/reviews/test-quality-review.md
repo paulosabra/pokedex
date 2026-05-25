@@ -1,179 +1,194 @@
 ---
-title: "Test Quality Review — PR2 (data-part2)"
+title: "Test Quality Review — PR3 (data-part3)"
 date: 2026-05-25
-branch: feature/data-part2
+branch: feature/data-part3
 reviewer: Test Quality Agent (VGV)
-scope: Local/Cache stack — Drift AppDatabase (T-09), PokemonDao + PokemonLocalDataSource (T-10), summary encoding utilities
 ---
 
 ## Test Quality Review
 
 ### Coverage Summary
 
-- **Test run**: Pass (all tests pass; suite exits 0)
-- **Coverage (excl. generated files)**: 89.1% overall (261/293 covered lines)
-- **PR2 files at 100%**:
-  - `lib/features/pokemon/data/datasources/pokemon_dao.dart` — 68/68 lines
-  - `lib/features/pokemon/data/summary_encoding.dart` — 8/8 lines
-- **Below threshold — intentionally excluded per scope note**:
-  - `lib/core/database/app_database.dart` — 4/36 lines (11%). Covered lines are `AppDatabase.forTesting`, `schemaVersion`, `migration`/`onCreate`. The uncovered lines are Drift `Table` column getters and the `_openConnection()` production factory — all build-time/codegen artifacts or platform-level wiring that cannot be exercised in a unit test context. Per the review brief, this is not flagged as a gap.
-- **Not in lcov** (no executable lines): `lib/features/pokemon/domain/entities/pokemon_filter.dart`, `lib/features/pokemon/domain/entities/sort_criteria.dart`, `lib/core/database/cache_policy.dart`, `lib/core/pokemon/pokemon_type_id.dart` — all are `const`/`enum` declarations; Dart does not emit DA lines for them.
-- **Missing test files**: None — every testable unit added in PR2 has a corresponding test file.
+- **Test run**: Pass (all tests green)
+- **Overall project coverage**: 61.4% (1,267 / 2,064 instrumented lines) — the low total is expected because the UI epic is not yet implemented; the data layer's own numbers are what matter here
+- **Mapper coverage (T-12 surface)**: 100% line coverage on all six mapper files
+- **RepositoryImpl coverage (T-13 surface)**: 100% line coverage (113 / 113 lines)
+- **Domain entity coverage**: mixed — see gaps below
+
+| File | Coverage |
+|---|---|
+| `data/mappers/generation_ranges.dart` | 100% (11/11) |
+| `data/mappers/type_effectiveness.dart` | 100% (22/22) |
+| `data/mappers/pokemon_mapper.dart` | 100% (10/10) |
+| `data/mappers/pokemon_detail_mapper.dart` | 100% (66/66) |
+| `data/mappers/evolution_mapper.dart` | 100% (25/25) |
+| `data/mappers/cache_mapper.dart` | 100% (33/33) |
+| `data/repositories/pokemon_repository_impl.dart` | 100% (113/113) |
+| `domain/entities/location_entry.dart` | **0% (0/2)** |
+| `domain/entities/location_entry.g.dart` | **25% (2/8)** |
+
+**Missing test files**: none. Every production file in the reviewed scope has a corresponding test file.
 
 ---
 
-### Test Infrastructure
+### Mapper Test Quality (T-12)
 
-**In-memory DB setup**: `AppDatabase.forTesting(DatabaseConnection(NativeDatabase.memory(), closeStreamsSynchronously: true))` is the correct pattern. `closeStreamsSynchronously: true` prevents stream subscriptions from outliving the test (critical for the reactive stream test). The `tearDown(() => db.close())` correctly returns the `Future<void>` from `db.close()`, which `flutter_test`'s `tearDown` accepts as `FutureOr<void>` — no leaked connections across tests.
+#### generation_ranges_test.dart — Pass with suggestions
 
-**Test helper `summary()`**: the factory function with named parameters and sensible defaults (`generationId: 1`, `height: 7`, `weaknessMask: 0`) is clean, reduces duplication, and makes test data intent legible. It correctly delegates `nameNormalized` to `normalizeName(name)`, which means the helper double-encodes the same function under test in `summary_encoding_test.dart`. This is an acceptable tradeoff: the DAO tests need a realistic `nameNormalized` column to test search, and duplicating the normalization call here keeps the fixture consistent with production without extracting a shared constant.
+The test covers end-of-generation boundary values and both out-of-range sentinels, and it correctly caught a real `generationForId(0)` bug during development. The `kUnknownGenerationId == 0` assertion is borderline (testing a constant rather than behavior) but it functions as a cross-layer contract test given the DAO depends on the numeric value 0 being "unknown."
 
-**`ids()` helper**: extracts only the `id` from query results, making assertions concise and order-sensitive. The ordered nature of the list is load-bearing for the sort tests — this is correct.
+**Gap — start-of-generation boundaries for gens 3–8 are not tested.** The test verifies `152` (Gen 2 start) and `906` (Gen 9 start) but skips `252`, `387`, `494`, `650`, `722`, and `810`. An off-by-one error that shifted the `<= 251` guard to `<= 252` would return `2` for id `252` instead of `3`, and the current suite would not catch it. With 100% line coverage this cannot cause a hidden regression today, but the gap makes the boundary contract weaker than it should be for a "highest-bug-risk surface."
 
-**Group structure**: five groups (`upsert + read`, `search`, `filters`, `sort`, `watchSummaries`) with a nested `setUp` in the groups that need data. The outer `setUp`/`tearDown` handle DB lifecycle; the inner group-level `setUp` handles fixture data. This is idiomatic and does not repeat setup across tests.
+#### type_effectiveness_test.dart — Pass
 
----
+Strong fixture-backed setup with real API JSON for Grass, Poison, Ground, and Electric types. All four RN-10 calculation paths are explicitly asserted:
 
-### `test/features/pokemon/data/datasources/pokemon_dao_test.dart`
+- Single-type 2x and 0.5x
+- Dual-type Grass/Poison 2x, 0.25x, and neutral-cancellation (key business rule)
+- Dual-type Grass/Ground 4x accumulation (RN-10)
+- Dual-type Grass/Ground 0x immunity (RN-10)
+- Empty relation map degrading to neutral (TE-10)
 
-#### Upsert + Read group
+The `weaknessMask` is verified against `typeWeaknessMask(effect.weaknesses)` — this is a legitimate structural check, not a tautology, because it confirms the mask field is kept in sync with the weaknesses list.
 
-**Result**: Pass — strong.
+No issues found.
 
-Covers: round-trip with dual-type Pokémon asserting both `primaryTypeId` and `secondaryTypeId`; conflict update (same id, different name, asserts updated name); cache-miss returning `null` for `readSummary`; and a combined detail/evolution-chain/type-relation round-trip in a single test that asserts all three `payloadJson` values and the `readDetail(2)` miss.
+#### pokemon_mapper_test.dart — Pass
 
-The upsert overwrite test correctly exercises `insertOnConflictUpdate` by writing two companions with the same id and asserting the second name survives — this is the only way to prove the `ON CONFLICT REPLACE` behavior rather than a silent no-op.
+Tests cover: dual-type ordering by slot, single-type, empty sprite fallback, and unknown type name filtering (TE-10). Real fixtures are used for the two main cases. The test file is concise and all assertions are behavioral.
 
-**Gap — `readEvolutionChain` and `readTypeRelation` null-miss not tested**: `readSummary(999)` has an explicit null-miss test at line 99. `readDetail(2)` has a null-miss assertion at line 128. However, `readEvolutionChain` and `readTypeRelation` null-miss paths have no corresponding assertion. The implementations are identical one-liners (`getSingleOrNull()`), so the regression risk is low, but completeness calls for at least one `expect(await dao.readEvolutionChain(999), isNull)` in the round-trip test.
+No issues found.
 
-#### Search group
+#### pokemon_detail_mapper_test.dart — Pass
 
-**Result**: Pass — strong. All four search paths exercised meaningfully.
+Covers a comprehensive set of the detail mapping contract:
 
-- Partial substring (`'saur'` → `[1, 2]`): confirms `LIKE '%saur%'` matches both ids without returning non-matches.
-- Case-insensitive (`'CHARMANDER'` → `[4]`): confirms `normalizeName` lowercases the query before the SQL `LIKE`.
-- Accent-insensitive RN-07 (`'flabe'` → `[669]` and `'FLABÉBÉ'` → `[669]`): two sub-assertions in one test confirm both directions — unaccented query finding accented data, and accented uppercase query normalized to find the same row. This is the most important search invariant.
-- Leading-zero number search RN-06 (`'4'`, `'04'`, `'004'` all → `[4]`): three assertions in one test confirm `int.parse` strips zeros before the `id.equals(id)` predicate.
-- No-match returns empty, not error.
+- Scalar fields, height, weight, genus from real Bulbasaur fixtures
+- Flavor text sanitization: verifies `\n` and `\f` removal and double-space collapse (RN-07)
+- Abilities with hidden flag
+- Gender percentages at rate 1 (12.5% female) and rate -1 (Ditto, genderless) — RN-11
+- Level-100 min/max stat formulas for HP and non-HP with documented arithmetic (RN-12)
+- Total stat sum
+- Type defense and weakness pass-through (RN-10)
+- Location mapping from encounter fixture (RF-34)
+- Full null-species degradation (TE-10)
 
-**Gap — whitespace-only query not tested**: the production code calls `query?.trim() ?? ''` before checking `term.isNotEmpty`. A query of `'  '` (whitespace only) should behave identically to `null` (no filter applied, all rows returned). This path is not tested. With the filter group's five-row dataset it would be straightforward: `expect(await ids(query: '  '), [1, 4, 31, 143, 152])`. If the trim were ever removed or broken, this would silently change behavior.
+The stat formula assertions include inline comments that document the expected arithmetic, which is exemplary.
 
-**Gap — numeric no-match not tested explicitly**: there is a name-query no-match test (`'mewtwo'` → empty). There is no equivalent for a numeric query that finds nothing (e.g., `query: '999'`). The no-match path for the numeric branch (`id.equals(999)` returning an empty list) is not exercised. This is a minor gap given the implementation is a straightforward Drift `where`/`getSingleOrNull`, but adding `expect(await ids(query: '999'), isEmpty)` would make coverage of both search branches' zero-result paths symmetric.
+**Minor gap**: there is no test for a species present but containing no English flavor text entries. The `_englishFlavorText` function has `english.isEmpty ? '' : ...` — this branch is distinct from `species == null` (which is tested) but is never exercised.
 
-#### Filters group
+**Minor gap**: `gender_rate` boundary values `0` (100% male) and `8` (100% female) are not tested. The formula `rate / 8 * 100` is simple and covered at `rate = 1`, but the zero-result and full-result cases have not been explicitly pinned.
 
-**Result**: Pass — good coverage of each filter dimension independently.
+**Minor gap**: `evYield` is tested for a single-stat EV yield (`1 Sp. Atk`). A multi-stat case (e.g., `1 Attack, 1 Speed`) is not tested; the join logic in `_evYield` has a code path for multiple contributing stats.
 
-- Type filter: three sub-assertions cover primary-only match (`fire` → `[4]`), secondary-only match (`poison` → `[1]`), and shared-primary match (`grass` → `[1, 152]`). The secondary-only assertion is important because the SQL uses `primaryTypeId.isIn(ids) | secondaryTypeId.isIn(ids)` — if the `|` were accidentally dropped, only the secondary-only case would catch it.
-- Generation filter: `generationId: 2` → `[152]`. Correct.
-- Height bucket filter: all three categories tested with representative values (7, 6, 9 dm for short; 13 dm for medium; 21 dm for tall). The SQL predicates `isSmallerThanValue(10)`, `isBiggerOrEqualValue(10) & isSmallerThanValue(20)`, and `isBiggerOrEqualValue(20)` are thus exercised by values within each range, not at the boundaries.
-- Weakness bitmask filter: fire-weak Pokémon (`[1]`), water-weak (`[4]`), zero-mask never matches (`grass` weakness → empty).
-- Combined intersection: type+generation.
-- Zero-result intersection.
+#### evolution_mapper_test.dart — Important issue
 
-**Gap — height boundary values not exercised**: the `_shortMaxDecimetres = 10` (exclusive upper bound for "short") and `_tallMinDecimetres = 20` (inclusive lower bound for "tall") constants are never tested AT the boundary. No test row has `height: 10` (which should be "medium", not "short") or `height: 20` (which should be "tall", not "medium"). If the predicates were accidentally written as `isSmallerOrEqualValue(10)` or `isBiggerThanValue(20)`, the existing tests would not detect the off-by-one. Adding two fixture rows — one at exactly 10 dm (expected: medium) and one at exactly 20 dm (expected: tall) — would close this gap.
+**The 100% line coverage figure masks insufficient behavioral assertions on the Eevee test.**
 
-**Gap — multi-type filter set not tested**: all `types:` assertions use a single-element set. The SQL for a multi-element set (`types: {grass, fire}`) uses `primaryTypeId.isIn([0, 2]) | secondaryTypeId.isIn([0, 2])` — a union that should return both Grass-type and Fire-type Pokémon. This OR-union behavior is never exercised. With the filter group's existing dataset (bulbasaur=grass, charmander=fire), `ids(filter: const PokemonFilter(types: {PokemonTypeId.grass, PokemonTypeId.fire}))` should return `[1, 4, 152]` (charmander primary fire, bulbasaur+chikorita primary grass). If `.isIn` were accidentally replaced with `.equals(ids.first)`, only the single-element tests would catch it.
+The Eevee branching test (line 31) only asserts:
+1. `chain.root.stage.name == 'eevee'`
+2. `chain.root.evolvesTo.length == 8`
+3. `vaporeon.stage.condition == 'Use water stone'`
 
-**Gap — multi-weakness filter set not tested**: all `weaknesses:` assertions use a single-element set. A multi-element set (e.g., `weaknesses: {fire, water}`) would compute `queryMask = fire_bit | water_bit` and apply `stored_mask & queryMask != 0` — OR semantics (weak to fire OR water). With bulbasaur (fire-weak) and charmander (water-weak), this query should return `[1, 4]`. This is untested. If the mask computation in `typeWeaknessMask(filter.weaknesses)` were subtly wrong for multi-element inputs, only a multi-element test would catch it.
+The Eevee fixture exercises all five remaining condition branches in `_conditionFrom` — `minHappiness` (Espeon and Umbreon), `timeOfDay` (Espeon day, Umbreon night), and `location` (Leafeon, Glaceon) — but none of these output strings are asserted. The three branches that produce `'High friendship'`, `'During day'`/`'During night'`, and `'At eterna-forest'` run silently, with their output discarded. A bug that corrupted those condition strings would not be detected by the current test.
 
-**Gap — combined filter combinations limited**: the only combined-dimension test pairs `types` + `generationId`. No test exercises `types` + `height`, `weaknesses` + `height`, or a three-dimension combination. These combinations exercise the accumulation of multiple `where()` calls on the same `SimpleSelectStatement`. While each dimension works independently, a regression in the accumulation logic (e.g., a premature `return statement` or an incorrect guard condition) would only be caught by multi-dimension tests.
+The dedicated constructor test (lines 45–85) correctly adds `heldItem` and `knownMove` coverage via a synthetic DTO, which is the right pattern. But the Eevee fixture test should be extended to spot-check at minimum one node from each of the three remaining condition families.
 
-#### Sort group
+**Pattern note**: the Eevee branching test verifies structural completeness (count) and one representative value. This is a good starting point but, for a surface designated T-12 (highest-bug-risk), every output path of the condition mapper should have an assertion. The test as written provides false confidence: it would still pass if `minHappiness` produced `null` or if `timeOfDay` produced a garbled string.
 
-**Result**: Pass.
+#### cache_mapper_test.dart — Pass with minor gap
 
-Both `numberAsc`/`numberDesc` and `nameAsc`/`nameDesc` are tested with a three-element dataset that has non-trivial ordering (ids 1, 2, 4; names bulbasaur, ivysaur, charmander). The assertions are expressed as full id lists — order-sensitive, not just set membership. This correctly validates sort direction.
+All four cache entity types have explicit round-trip tests (summary, detail, evolution, type-relations). The `summaryToCompanion` companion test verifies each derived SQL column individually, not just the JSON blob. The `pokemonFromRow` round-trip confirms the entity survives encode/decode unchanged.
 
-Note: `nameAsc`/`nameDesc` sorts on `t.name` (the raw display name), not `t.nameNormalized`. The test data is all ASCII, so there is no observable difference between the two columns. This is consistent with the production code and deliberate per design. No gap here, but if Pokémon with leading accented characters (e.g., hypothetical names starting with `é`) were ever in the dataset, sorting on `t.name` vs. `t.nameNormalized` would produce different results. This is a future maintenance concern, not a current test gap.
+**Minor gap**: all tests use Bulbasaur (dual-type: Grass/Poison). The `summaryToCompanion` function sets `secondaryTypeId: Value(null)` for single-type Pokémon, and the `summaryToCompanion` companion test never exercises this branch. A Pikachu (single-type Electric) fixture is available and could close this with a two-line companion test.
 
-#### watchSummaries group
-
-**Result**: Pass — the listener+pumpEventQueue approach is correct and the race condition noted in the comment is real.
-
-The test avoids the subscribe/insert race by using an explicit listener, pumping the event queue after subscription (to observe the initial empty emit), then inserting, then pumping again. This is more deterministic than `expectLater(..., emitsInOrder([...]))`, which can miss the initial emission if the insert fires before the stream delivers. The plan suggested `emitsInOrder` but the implementation's choice is strictly better.
-
-**Gap — watchSummaries asserts list length, not row identity**: `lengths` collects only `rows.length`. The first emission confirms `length == 0` (empty cache observed), the second confirms `length == 1` (one row inserted). The test does not assert that the emitted row is the correct row (e.g., `rows.first.id == 1` or `rows.first.name == 'bulbasaur'`). A bug that emitted the wrong row — or a different row previously in a leaked DB state — would not be caught. Adding `expect(rows.first.id, 1)` on the second emission would close this without structural change.
-
-**Gap — watchSummaries does not test re-emit on UPDATE**: the stream test covers the insert path (empty → non-empty). Drift's `watch()` also re-emits on UPDATE (the conflict-update path). The DAO has an explicit upsert-overwrites test, but there is no test confirming that `watchSummaries` re-emits after a conflict-update upsert. This is a lower-priority gap since Drift's internal watch mechanism is library-tested, but from a contract perspective `watchSummaries` should re-emit whenever the matching rows change — including mutations, not just insertions.
+**Minor gap**: the detail round-trip always uses `encounters: const []`. The `LocationEntry.fromJson` factory is therefore never called in the entire test suite (confirmed by 0% coverage on `location_entry.dart`). The cache_mapper round-trip should use the `encounters_bulbasaur.json` fixture to exercise location deserialization from the JSON cache layer.
 
 ---
 
-### `test/features/pokemon/data/summary_encoding_test.dart`
+### Repository Implementation Test Quality (T-13)
 
-**Result**: Pass — correct and complete for the cases tested.
+#### pokemon_repository_impl_test.dart — Pass with important gaps
 
-**`normalizeName` group**:
+**Architecture**: the test correctly uses a real in-memory Drift database (`NativeDatabase.memory()`) as the local source and Mocktail mocks for the remote and connectivity. This is the right approach — it exercises the actual DAO query behavior and catches real SQL/ORM issues while isolating network calls. The injected clock and helper functions (`nowMs`, `daysAgo`) make TTL tests deterministic. Fixture files are used for all remote DTO data.
 
-- Lowercase: two assertions (`Bulbasaur` and `PIKACHU`). The implementation lowercases before the diacritics lookup, so uppercase accented input (e.g., `'NIDORÁN'` → `'nidoran'`) is exercised in the third test and confirms that the `toLowerCase()` + map-on-lowercase-keys approach works end-to-end for both lowercase and uppercase input.
-- Diacritics RN-07: `'Flabébé'` → `'flabebe'`, `'Pokémon'` → `'pokemon'`, `'NIDORÁN'` → `'nidoran'`. These cover the `é` and `á` entries in the map, confirming the rune-iteration approach handles multi-byte characters correctly.
-- Unmapped characters (`Farfetch'd`, `Ho-Oh`): confirms the `?? char` fallback preserves non-diacritic characters.
+**Decision machine coverage for `getPokemonDetail`**:
 
-**Gap — not all diacritic entries exercised**: the `_diacritics` map has 25 entries covering `á à â ä ã å / é è ê ë / í ì î ï / ó ò ô ö õ / ú ù û ü / ç / ñ`. The tests only exercise `é` (Flabébé, Pokémon) and `á` (NIDORÁN). The remaining 23 entries are never directly tested. The relevant Pokémon names that use them (e.g., Farfetch'd uses `'`, not a diacritic; no gen-I Pokémon uses `ü` or `ç`) are rarely encountered. This is a coverage gap the tool does not surface because the individual `if`/`else` branch inside the rune loop is covered by any single diacritic entry hit. The gap matters if a future maintainer adds a new Pokémon name containing, e.g., `ñ` or `ö` and the normalization silently fails due to a typo in the map entry. Adding `expect(normalizeName('señor'), 'senor')` and `expect(normalizeName('über'), 'uber')` would provide two additional anchor tests without verbosity.
+| Branch | Tested |
+|---|---|
+| Cold miss, online → compose, cache, return | Yes |
+| Cold miss, offline → NetworkFailure | Yes |
+| Mandatory `/pokemon` fails → propagate failure | Yes |
+| Fresh cache, online → return cached, background revalidate | Yes |
+| Stale cache, network success → return fresh | Yes |
+| Stale cache, network failure → serve stale (TE-02) | Yes |
+| Corrupt cache, online → treat as miss, recompose | Yes |
+| Corrupt cache, offline → CacheFailure | Yes |
+| Partial compose (species fails) → return degraded, not cached | Yes |
+| Partial compose (type + encounters fail) → return degraded, not cached | Yes |
+| Type cache reuse (fresh cached relations) → no remote type fetch | Yes |
 
-**`typeWeaknessMask` group**:
+The stale+failure test (TE-02) verifies the stale value is the exact sentinel `'STALE'`, not merely "non-empty." This is a meaningful assertion.
 
-- Empty set → 0. Correct.
-- Single type at index 0 (grass) → 1, index 1 (poison) → 2, index 2 (fire) → 4. Confirms `1 << index` bit placement for the three lowest indices.
-- Multi-type OR: `{grass, fire}` → `1 | 4 = 5`. Confirms the fold. The sub-assertions `mask & grassMask isNonZero` and `mask & fireMask isNonZero` and `mask & waterMask == 0` verify the bitmask semantics beyond just checking the numeric value.
+**Issue — fresh cache background revalidate test uses a bare type assertion.** The test at line 196 asserts `expect(result, isA<Ok<PokemonDetail>>())` and then verifies `remote.fetchPokemon` was called. It does not assert that the returned value is the original cached entity (i.e., that the background fetch did not block the return). This is the central contract of the "serve cache immediately, update in background" pattern. The assertion `expect((result as Ok).value, stateEquals(cached))` or at minimum `expect((result as Ok).value.description, isNot('STALE'))` (with a sentinel-seeded cache) would make the test authoritative.
 
-**Gap — high-index type not tested**: `PokemonTypeId` has 18 values (index 0–17). The highest index tested is `fire` (index 2). The bit encoding for `steel` (index 17) would be `1 << 17 = 131072`. A test `expect(typeWeaknessMask({PokemonTypeId.steel}), 1 << 17)` would confirm no off-by-one in the bit shift for indices beyond the low range. This matters for the DAO's bitmask `&` filter: if the high bit were ever stored as 0 due to integer overflow (Dart uses 64-bit ints, so 1 << 17 is safe, but worth confirming), the weakness filter for Steel-weak Pokémon would silently fail.
+**Issue — stale evolution chain is not tested.** The evolution chain tests cover two states: cold miss (line 318) and fresh cache hit (line 337). The third state — row exists but is stale (`_isFresh` returns false) — is absent. In this case the implementation falls through to a remote fetch and updates the cache. This path includes the `upsertEvolutionChain` call that is not otherwise exercised. Given the TTL branch is already proven for `getPokemonDetail`, the risk is low, but the omission means the TTL enforcement for evolution chains is unverified.
 
----
+**Issue — null `chainId` branch untested.** `getEvolutionChain` has a guard `if (chainId == null) return const Err(NotFoundFailure())` (line 125). The LCOV data confirms this line is not instrumented — it was never executed across all tests because all fixtures have well-formed evolution chain URLs. A test that provides a species with a malformed or absent `evolutionChain.url` would close this.
 
-### `test/features/pokemon/domain/entities/pokemon_filter_test.dart`
+**Issue — corrupt evolution cache is not tested.** The `_tryParse` path within the fresh evolution cache branch (line 130) is hit only by the happy-path test. There is no test for a row that is fresh but has corrupt JSON, which would cause `_tryParse` to return null and fall through to a remote fetch. The analogous corrupt-cache tests exist for `getPokemonDetail` but not for `getEvolutionChain`.
 
-**Result**: Pass — covers the three canonical behaviors of a Freezed value object.
+**`getPokemonList` coverage**: three tests cover the core paths (offline, success with `hasMore`, empty page, per-id failure). The success test verifies `items.length == 1`, `hasMore == true`, and that the DAO received the upsert — sufficient at the integration level since `pokemonFromDto` is independently unit-tested.
 
-- Default construction: asserts `types isEmpty`, `weaknesses isEmpty`, `height isNull`. Confirms the `@Default` annotations work.
-- Value equality: two identical filters assert `equals` and matching `hashCode`. This is the critical test for use as a map key or in `== `comparisons in the repository and UI layer.
-- `copyWith`: a base filter with `types: {fire}` gets `height: short` applied; asserts the original `types` is preserved and the new `height` is present.
-
-**Gap — inequality not tested**: the equality test only confirms that two equal objects are equal. It does not confirm that two different filters are not equal (e.g., `PokemonFilter(types: {fire}) != PokemonFilter(types: {grass})`). While Freezed's `==` implementation is known-correct, an explicit `isNot(equals(...))` assertion documents the contract and would catch a regression if the equality were ever accidentally hand-overridden.
-
-**Gap — `copyWith` clearing a nullable field to `null` not tested**: `height` is `HeightCategory?` (nullable). The test covers setting `height` from null to a non-null value, but not the reverse — clearing `height` back to `null` via `copyWith(height: null)`. Freezed's generated `copyWith` for nullable fields uses `Object?` sentinel semantics (passing `null` explicitly clears the field). If a future refactor introduces a custom `copyWith` without the sentinel pattern, this path would break. Adding `expect(base.copyWith(height: HeightCategory.short).copyWith(height: null).height, isNull)` would close this gap.
-
-**Gap — `weaknesses` field not tested in `copyWith`**: the `copyWith` test only exercises `height`. The `weaknesses` field (a `Set<PokemonTypeId>`) is never tested in a `copyWith` scenario, nor is `types` mutated via `copyWith`. Given Freezed generates a uniform `copyWith`, this is low-risk, but a single `expect(filter.copyWith(weaknesses: {PokemonTypeId.fire}).weaknesses, {PokemonTypeId.fire})` would complete the coverage.
+**`search` / `filter` / `watchCachedSummaries`**:
+- Search delegates correctly and the corrupt-summary CacheFailure path is explicitly tested (line 404).
+- Filter is tested with `const PokemonFilter()` (all defaults, no active criteria). The delegation of type, weakness, and height filter parameters to the DAO is never exercised at the repository level. The DAO itself tests these in `pokemon_dao_test.dart`, so this is a boundary choice, but the composition is unverified at the repository layer.
+- `watchCachedSummaries` has one happy-path stream test. The error path (corrupt summary in the stream — which would throw `FormatException` since no error handling wraps the `.map()`) is untested.
 
 ---
 
 ### Anti-Patterns Found
 
-| Location | Anti-pattern | Issue | Fix |
-|---|---|---|---|
-| `pokemon_dao_test.dart:308` | Asserting count instead of identity | `watchSummaries` test collects only `rows.length` into `lengths`. A wrong row being emitted would not be caught. | Add `rows.first.id == 1` (or equivalent name assertion) to the second emission check. |
-| `pokemon_dao_test.dart:265–284` | Incomplete combination coverage | "combined filters intersect" only tests `types + generationId`. Other dimension pairings (`types + height`, `weaknesses + height`) are untested, leaving the multi-where accumulation logic unverified end-to-end. | Add one more combined-filter test pairing a different dimension combination (e.g., `height: short` + `generationId: 1`). |
+**evolution_mapper_test.dart:31–43 — Structural count without behavioral assertions**
+
+- Issue: `expect(chain.root.evolvesTo, hasLength(8))` verifies a count but no test asserts the output of the `minHappiness`, `timeOfDay`, or `location` condition branches that the Eevee fixture exercises. Three condition branches produce return values (`'High friendship'`, `'During day'`/`'During night'`, `'At eterna-forest'`) that are silently discarded after execution.
+- Fix: Add `firstWhere` look-ups for Espeon, Umbreon, and Leafeon and assert their `stage.condition` values, matching the pattern already used for Vaporeon.
+
+**pokemon_repository_impl_test.dart:196–206 — Bare type assertion on the most important cache contract**
+
+- Issue: `expect(result, isA<Ok<PokemonDetail>>())` does not confirm the returned value is the cache snapshot. The core promise of the fresh-cache branch is "caller receives the old value immediately while revalidation proceeds in the background." A bare type check would pass even if the implementation inadvertently awaited the revalidation.
+- Fix: Seed the cache with a sentinel description (as the stale tests do) and assert `expect((result as Ok<PokemonDetail>).value.description, equals(seededDetail.description))`.
 
 ---
 
 ### Recommendations
 
-1. **[Important] Add height exact-boundary rows to the filter group** (`pokemon_dao_test.dart`): Insert rows at exactly 10 dm and 20 dm and assert they fall into the correct bucket (medium and tall, respectively). The current off-by-one boundary for `isSmallerThanValue(10)` vs. `isSmallerOrEqualValue(10)` would be silently wrong without this. This is the highest-risk untested SQL predicate in the DAO.
+1. **Extend the Eevee branching test** to assert Espeon's condition (`'High friendship'`), Umbreon's condition (`'During night'` or `'During day'`), and Leafeon's condition (`'At eterna-forest'`). The Vaporeon look-up pattern at line 39 is the right template. This closes the most significant assertion gap for T-12.
 
-2. **[Important] Assert row identity in `watchSummaries`** (`pokemon_dao_test.dart`): Change the listener to collect `rows.first.id` (or `rows.map((r) => r.id).toList()`) and assert `[1]` on the second emission alongside the existing length check. A length-only assertion does not verify the content of reactive emissions.
+2. **Add a location cache deserialization test** — change the `detail cache round-trips through payloadJson` test in `cache_mapper_test.dart` to use `encounters_bulbasaur.json` (already available as a fixture) so that `LocationEntry.fromJson` is exercised. This closes the 0% gap on `location_entry.dart`.
 
-3. **[Important] Add multi-type filter set test** (`pokemon_dao_test.dart`): Test `PokemonFilter(types: {PokemonTypeId.grass, PokemonTypeId.fire})` against the existing filter group dataset and assert the union result `[1, 4, 152]`. The `isIn()` OR logic is only tested via single-element sets currently.
+3. **Add a stale evolution chain test** — seed the chain with `updatedAt: daysAgo(8)`, stub `remote.fetchEvolutionChain` to return the DTO, and assert the result is `Ok` and that `verifyNever` on the remote fetch is no longer satisfied. This closes the missing TTL branch and the `upsertEvolutionChain` path in `getEvolutionChain`.
 
-4. **[Suggestion] Add whitespace-only query test** (`pokemon_dao_test.dart`): `expect(await ids(query: '  '), [1, 4, 31, 143, 152])` (using the filter group's setUp data) confirms the `trim()` guard treats whitespace as an absent query.
+4. **Add a null `chainId` test** — stub `remote.fetchSpecies` to return a `PokemonSpeciesDto` with an empty or malformed `evolutionChain.url` and assert `NotFoundFailure`.
 
-5. **[Suggestion] Add numeric no-match test** (`pokemon_dao_test.dart`): `expect(await ids(query: '999'), isEmpty)` mirrors the existing name no-match test and makes zero-result coverage symmetric for both search branches.
+5. **Strengthen the fresh cache revalidation test** — seed the cache with a distinguishable sentinel description and assert the returned value matches the cached entity, not the revalidated one, to make the "serve immediately" contract explicit.
 
-6. **[Suggestion] Test high-index bit in `typeWeaknessMask`** (`summary_encoding_test.dart`): `expect(typeWeaknessMask({PokemonTypeId.steel}), 1 << 17)` confirms the bit shift is correct at the 18th type (index 17), which is the uppermost bit in the 18-bit mask scheme used by the DAO's `weaknessMask & :mask` filter.
+6. **Add generation boundary assertions for gens 3–8** — test `generationForId(252)` through `generationForId(810)` at the first ID of each generation to guard against off-by-one regressions at the 251, 386, 493, 649, 721, and 809 boundaries.
 
-7. **[Suggestion] Test `copyWith` clearing `height` to null and mutating `weaknesses`** (`pokemon_filter_test.dart`): One additional test closing the two `copyWith` field paths not yet exercised.
-
-8. **[Suggestion] Add multi-weakness set test** (`pokemon_dao_test.dart`): `PokemonFilter(weaknesses: {PokemonTypeId.fire, PokemonTypeId.water})` should return `[1, 4]` (bulbasaur fire-weak, charmander water-weak) — confirming OR semantics within the weakness set via the bitmask `&` operation.
-
-9. **[Suggestion] Add `readEvolutionChain` and `readTypeRelation` null-miss assertions** (`pokemon_dao_test.dart`): Extend the round-trip test with `expect(await dao.readEvolutionChain(999), isNull)` to match the existing `readSummary` and `readDetail` null-miss tests.
+7. **Add a single-type summary companion test** — call `summaryToCompanion` with a Pikachu (single-type, `types.length == 1`) and assert `companion.secondaryTypeId.value == null`.
 
 ---
 
 ### Verdict
 
-**Fix before merging — Important issues (3), Suggestions (6).**
+**Fix 5 issues before merging.**
 
-The PR2 test suite is structurally sound. The in-memory Drift setup is correct, the tearDown is properly async, the search tests cover all specified RN-06/07 requirements meaningfully, and the `normalizeName`/`typeWeaknessMask` tests achieve genuine 100% line coverage with non-tautological assertions. The use of the listener+pumpEventQueue pattern for the reactive stream test is strictly better than the plan's suggested `emitsInOrder`.
+The test suite is well-structured, uses real fixtures and a real in-memory database for the repository, and achieves its stated 100% line coverage targets. Most mapper logic is thoroughly verified. However, five issues need to be addressed:
 
-The three Important issues all involve SQL predicate correctness that the current tests cannot catch: an off-by-one at the height category boundary, missing row-identity verification on the reactive emission, and untested OR-union semantics for a multi-element type filter set. None of these are paper coverage gaps — each represents a real class of regression that a passing suite would not surface today.
+1. The Eevee branching test exercises three condition branches (`minHappiness`, `timeOfDay`, `location`) without asserting their output — false confidence on the highest-bug-risk surface.
+2. `LocationEntry.fromJson` is at 0% coverage because the detail cache round-trip uses empty encounters.
+3. The stale evolution chain branch is untested.
+4. The null `chainId` guard in `getEvolutionChain` is never triggered.
+5. The fresh cache background-revalidation test uses a bare `isA<Ok>` assertion that does not verify the "serve cache immediately" contract.
 
-The six Suggestions are low-effort (one or two `expect` calls each) and together would bring filter-dimension combination coverage and encoding edge-case coverage to a level appropriate for a cache layer that PR3 depends on for correctness.
+Items 3–5 require small additions; items 1–2 require fixture changes. None require structural refactoring. The three "minor gap" findings in the recommendations section are suggestions rather than blockers.
