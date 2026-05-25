@@ -6,10 +6,11 @@ import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_page.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
 
-/// The single entry point to Pokémon data (RN-02). Detail reads are cache-first
-/// with background revalidation; list reads are network-backed and seed the
-/// cache that powers offline search/filter/watch. All fallible one-shot calls
-/// return a [Result].
+/// The single entry point to Pokémon data (RN-02). Detail reads are
+/// cache-first: a fresh hit revalidates in the background, while a stale hit
+/// revalidates synchronously and falls back to the stale copy on failure. List
+/// reads are network-backed and seed the cache that powers offline
+/// search/filter/watch. All fallible one-shot calls return a [Result].
 abstract interface class PokemonRepository {
   /// Fetches one paginated page of the list (RN-14) from the network, caching
   /// each summary so search/filter/watch work offline. Fails with a network

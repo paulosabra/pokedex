@@ -44,7 +44,9 @@ class _FailingDetailWriteLocal implements PokemonLocalDataSource {
 
   @override
   Future<void> upsertDetail(PokemonDetailsCompanion detail) async {
-    throw StateError('cache write failed');
+    // A realistic cache-write failure is an Exception (e.g. Drift I/O), not an
+    // Error; the repository's best-effort write only swallows Exceptions.
+    throw Exception('cache write failed');
   }
 
   @override
@@ -326,7 +328,10 @@ void main() {
 
       final result = await repoWithFailingWrites.getPokemonDetail(1);
 
-      expect(result, isA<Ok<PokemonDetail>>());
+      expect(
+        (result as Ok<PokemonDetail>).value.description,
+        composedDetail().description,
+      );
     });
 
     test('corrupt cache online is treated as a miss and recomposed', () async {

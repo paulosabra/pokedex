@@ -24,9 +24,9 @@ import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
 import 'package:pokedex/features/pokemon/domain/repositories/pokemon_repository.dart';
 
 /// Implementation of [PokemonRepository] (RN-02). Detail reads are cache-first
-/// with background revalidation and degrade to stale/offline gracefully; list
-/// reads are network-backed and seed the cache that powers offline
-/// search/filter/watch.
+/// (fresh hits revalidate in the background, stale hits revalidate
+/// synchronously) and degrade to stale/offline gracefully; list reads are
+/// network-backed and seed the cache that powers offline search/filter/watch.
 class PokemonRepositoryImpl implements PokemonRepository {
   /// Creates a [PokemonRepositoryImpl]. The clock is injectable for TTL tests.
   PokemonRepositoryImpl(
@@ -232,11 +232,12 @@ class PokemonRepositoryImpl implements PokemonRepository {
     );
 
     if (complete) {
-      // Best-effort: a cache-write failure must not discard a detail the caller
-      // already paid the network for. Persistence here is incidental.
+      // Best-effort: a cache-write I/O failure must not discard a detail the
+      // caller already paid the network for. Scoped to Exception so a mapper
+      // bug (an Error) still surfaces instead of being silently buried.
       try {
         await _local.upsertDetail(detailToCompanion(detail, nowMs: nowMs));
-      } on Object {
+      } on Exception {
         // Swallow: the composed detail is returned regardless.
       }
     }
