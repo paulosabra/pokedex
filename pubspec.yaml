@@ -9,16 +9,25 @@ environment:
 
 dependencies:
   dio: ^5.9.0
+  # drift + drift_dev are pinned exact to the analyzer-9 stable codegen line.
+  # drift_dev 2.32.0 jumps to analyzer ^10, which would drag freezed/riverpod
+  # codegen onto -dev prereleases. drift_flutter 0.2.8 transitively pins the
+  # matching sqlite3_flutter_libs/sqlite3. See pubspec.lock for the proof.
+  drift: 2.31.0
+  drift_flutter: 0.2.8
   flutter:
     sdk: flutter
   flutter_riverpod: ^3.0.0
   freezed_annotation: ^3.0.0
-  json_annotation: ^4.9.0
+  json_annotation: ^4.11.0
   retrofit: ^4.9.2
   riverpod_annotation: ^4.0.0
+  sqlite3_flutter_libs: ^0.5.24
 
 dev_dependencies:
   build_runner: ^2.4.0
+  # drift_dev pinned exact — see the drift note under dependencies.
+  drift_dev: 2.31.0
   flutter_test:
     sdk: flutter
   # freezed and riverpod_generator are pinned to the analyzer-9 stable codegen line.
