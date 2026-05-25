@@ -1,24 +1,154 @@
-# VGV Code Review — Data Layer PR1 (T-06 · T-07 · T-08 · T-11 — Remote / Network stack)
+# VGV Code Review — Data Layer PR2 (Local / Cache stack)
 
-- **Branch:** `feature/data-part1` (working tree, uncommitted) → target `epic/data-layer`
-- **Scope reviewed (PR1 only):**
-  - `lib/core/network/dio_client.dart`, `error_mapper.dart`, `interceptors/{retry,rate_limit,logging}_interceptor.dart`
-  - `lib/features/pokemon/data/dtos/*.dart` (7 source DTOs, Freezed + json_serializable)
-  - `lib/features/pokemon/data/services/poke_api_service.dart` (Retrofit)
-  - `lib/features/pokemon/data/datasources/pokemon_remote_data_source.dart`
-  - `lib/core/error/failure.dart` (added `implements Exception`)
-  - `build.yaml` (new), `pubspec.yaml` (dio / retrofit / retrofit_generator pins)
-  - `test/**` for all of the above + `test/fixtures/`, `test/helpers/`
-- **Out of scope (PR3, not flagged):** repository, mappers, domain entities, `connectivity_plus`
-- **Source of truth:** `docs/plan/2026-05-25-feat-infrastructure-data-layer-plan.md`
-- **Reviewed:** 2026-05-25
-- **Verification:** `dart analyze --fatal-infos --fatal-warnings` on PR1 paths → *No issues found*. Tests pass; PR1 line coverage reported at 100%.
+**Branch:** `feature/data-part2` → `epic/data-layer`
+**Scope:** T-09 (Drift database + connection + cache tables) and T-10 (DAO / local data source),
+plus the T-14 enablers pulled forward (`sort_criteria.dart`, `pokemon_filter.dart` + `HeightCategory`)
+and the PR3-shared `summary_encoding.dart`.
+**Reviewed against:** `docs/plan/2026-05-25-feat-infrastructure-data-layer-plan.md`
+**Date:** 2026-05-25
+
+---
 
 ## Summary
 
-This is an exemplary VGV data-layer slice and is **ready to merge**. The layered-architecture boundaries are clean and deliberate: DTOs and the Retrofit service depend only on each other and Freezed; the `ErrorMapper` correctly lives in `core/network/` (not `core/error/`) precisely because it imports `package:dio`, keeping the dio-free domain's transitive imports clean; the `Failure`/`Result` vocabulary is the single error currency and no `DioException` escapes the data layer. The DTOs are faithful to the real PokéAPI wire format — every round-trip test runs against genuine fixtures, the hyphenated `official-artwork` key is handled with an explicit `@JsonKey`, optional fields are nullable or `@Default`-ed for TE-10 tolerance, and the recursive evolution tree is modeled correctly. The three hand-rolled interceptors are small, single-purpose, web-safe (no `dart:io HttpDate`), and individually tested with a deterministic queue adapter. Naming passes the 5-second rule throughout. The plan's pinned decisions (catch-all → `ServerFailure`, exact codegen pins, `field_rename: snake`, lean-internal/faithful-external modeling) are all honored.
+This is a clean, disciplined slice and is **ready to merge**. It does exactly what PR2 set out to do
+and no more: four Drift tables with TTL columns and a normalized-name search column, a unified
+`drift_flutter` connection, a `@DriftAccessor` DAO behind a DIP interface that returns raw rows, and
+SQL-native search / filter / sort / weakness-mask querying with a reactive stream. The toolchain pins
+are honored exactly (analyzer 9.0.0, drift / drift_dev 2.31.0, drift_flutter 0.2.8; the only `-dev`
+package in the lock is the documented, unavoidable `riverpod_analyzer_utils 1.0.0-dev.9`). The
+analyzer is clean, every test passes, and the two highest-risk hand-written units
+(`pokemon_dao.dart`, `summary_encoding.dart`) are at 100% line coverage.
 
-There are **zero critical issues** and **zero architecture violations**. The findings below are a small number of important test-precision gaps and a handful of nice-to-haves. None block the merge.
+Layer separation is respected and even defended thoughtfully: the DAO returns Drift rows (not
+entities), `PokemonDao` is deliberately *not* registered in `@DriftDatabase(daos:)` so `core/database`
+never imports `features/domain`, and the domain enablers stay framework-light. Every intentional
+decision called out in the brief checks out in the code.
+
+There are **no critical issues**. The findings below are a few should-fix items (test branch-coverage
+gaps and one threshold-partition maintenance hazard) and a handful of suggestions. None block the
+merge.
+
+---
+
+## Pass 1 — Regressions & Breaking Changes
+
+- **No deletions.** `git diff` shows only additions to `pubspec.yaml`, `pubspec.lock`, `.gitignore`,
+  `analysis_options.yaml`, and the auto-generated `macos/.../GeneratedPluginRegistrant.swift` (the
+  `sqlite3_flutter_libs` plugin registration — a correct, expected side effect of adding the dep).
+- **No public API changes** to existing code. All new files are additive; nothing in `core/error`,
+  `core/network`, or `core/pokemon` was touched.
+- **No tests deleted or weakened.** Only new test files were added.
+- **Dependencies** match the plan's resolved pins exactly. Confirmed in `pubspec.lock`: `drift 2.31.0`,
+  `drift_dev 2.31.0`, `drift_flutter 0.2.8`, `sqlite3 2.9.4`, `sqlite3_flutter_libs 0.5.42`,
+  `analyzer 9.0.0`. `json_annotation` bumped `^4.9.0 → ^4.11.0` (caret, benign). No version
+  downgrades or package removals in the lock; the codegen line stayed on stable.
+- **Committed web assets** (`web/sqlite3.wasm` ~731 KB, `web/drift_worker.js` ~355 KB) are present and
+  *not* git-ignored. The code references `Uri.parse('drift_worker.js')` and the committed worker is
+  named `drift_worker.js` — the filename ambiguity the plan flagged is resolved consistently, and the
+  brief confirms `flutter build web` compiles.
+
+**Verdict:** no regressions.
+
+---
+
+## Pass 2 — VGV Architecture & Conventions
+
+### Layer separation — excellent
+
+- **DAO returns rows, not entities.** `PokemonDao` exposes `PokemonSummaryRow` / `...Companion`
+  types; the repository (PR3) owns row↔entity mapping. The cache layer stays domain-entity-free,
+  exactly as the reconciliation table prescribes.
+- **No back-edge from `core/database` into features.** The `@DriftDatabase` annotation lists only the
+  four tables; `PokemonDao` is a separate `@DriftAccessor` constructed manually (`PokemonDao(db)`).
+  This is the right call — registering the DAO in `daos:` would force `app_database.dart` to import
+  `features/pokemon/domain` (`PokemonFilter`, `SortCriteria`), a layer violation. The code matches the
+  documented decision.
+- **`PokemonLocalDataSource` interface (DIP).** A clean `abstract interface class` so PR3's repository
+  can be unit-tested against a fake. Earned abstraction (concrete DAO + the future fake = two
+  implementations), not premature generalization.
+- **Domain enablers stay light.** `pokemon_filter.dart` imports only `freezed_annotation` and
+  `core/pokemon`; `sort_criteria.dart` is pure Dart. No `drift`/`dio` leaks into `domain/`.
+
+### Naming & the 5-second rule — passes
+
+- `PokemonSummaries`, `PokemonDao`, `normalizeName`, `typeWeaknessMask`, `kPokemonCacheTtl`,
+  `HeightCategory` all read instantly. The `@DataClassName('*Row')` convention (`PokemonSummaryRow`,
+  etc.) is consistent and disambiguates rows from future domain entities.
+- File names are snake_case and match their primary export.
+
+### Linting & style — clean
+
+- `dart analyze --fatal-infos --fatal-warnings` reports **No errors** across the PR2 paths (verified
+  via the analyzer tool).
+- `*.drift.dart` correctly added to both `.gitignore` and `analysis_options.yaml` exclude globs,
+  keeping the 1:1 ignore/analysis invariant even though `part`-mode currently emits only `*.g.dart`
+  (defensive, per the plan).
+- No lint suppressions in any hand-written file. The only `// ignore:` comments live in generated
+  `*.freezed.dart` / `*.g.dart` (out of scope, git-ignored).
+
+### Null safety & error handling — sound
+
+- No force-unwraps (`!`) in production code. Nullable reads use `getSingleOrNull()` and return `null`
+  on cache miss — correct cache-miss semantics.
+- The nullable `secondaryTypeId.isIn(ids)` in the type filter is safe: SQL `NULL IN (...)` yields NULL
+  (not true), so single-type Pokémon are correctly handled, and a secondary-type match still works via
+  the `primaryTypeId.isIn(...) | secondaryTypeId.isIn(...)` OR.
+
+### Lifecycle & resource management — handled
+
+- Tests close the DB in `tearDown(() => db.close())` and use `closeStreamsSynchronously: true`, so the
+  reactive `watch()` subscription tears down deterministically. The `watchSummaries` test also
+  explicitly `await sub.cancel()`s.
+
+---
+
+## Pass 3 — Testing Quality
+
+### What's tested well
+
+- **`pokemon_dao_test.dart`** is thorough and behavior-focused (not implementation-coupled):
+  upsert→read round-trip; conflict-update overwrite; cache-miss → null; detail/evolution/type
+  round-trips; name search (partial / case / accent, using the real accented `flabébé`); number search
+  with leading zeros (`4`/`04`/`004`); type filter on primary *and* secondary; generation filter; all
+  three height buckets; weakness-mask filter incl. the zero-mask non-match; combined-filter
+  intersection; two zero-result-returns-empty cases; all four sorts; and a reactive `watchSummaries`
+  emit-on-insert assertion that correctly avoids the subscribe/insert race by pumping the event queue.
+- **`summary_encoding_test.dart`** covers `normalizeName` (lowercase, diacritics, untouched chars like
+  `'` and `-`) and `typeWeaknessMask` (empty→0, single-bit, multi-bit OR + intersection).
+- **`pokemon_filter_test.dart`** covers defaults, value equality, and `copyWith`.
+- **Coverage (verified from `coverage/lcov.info`):** `pokemon_dao.dart` 68/68 (100%),
+  `summary_encoding.dart` 8/8 (100%). Matches the brief's claim.
+- **No anti-patterns:** no tautologies, no over-mocking (a real in-memory `NativeDatabase.memory()`
+  exercises real SQL — the right call for a DAO), no assertion-free tests.
+
+### Gaps (see Important findings)
+
+- No tests at the exact height-bucket boundaries (`height == 10`, `height == 20`).
+- The all-three-filters-combined case (`types` + `weaknesses` + `height` non-null in one filter) is
+  not exercised.
+- `app_database.dart`'s `_openConnection()` / `MigrationStrategy` are not unit-tested (validated by
+  the documented `flutter build web` / manual web run instead).
+
+---
+
+## Pass 4 — Simplicity & YAGNI Audit
+
+This slice is admirably lean. Notable good calls:
+
+- **Manual DAO construction over `daos:` registration** — avoids the layer back-edge *and* is simpler.
+- **`drift_flutter`'s unified `driftDatabase()`** instead of the plan's hand-rolled conditional-export
+  connection files (`connection.dart`/`native.dart`/`web.dart` were intentionally *not* created). That
+  deletes three files' worth of platform glue — good YAGNI, confirmed intentional in the brief.
+- **No premature generic `BaseDao<T>`** — one concrete DAO.
+- **`summary_encoding.dart` as plain top-level functions** — easiest to test, no wrapper class.
+- **No commented-out code, no TODOs/FIXMEs** in the hand-written files.
+
+The only deferred-but-unused item is `cache_policy.dart`, whose constants have no consumer until PR3 —
+a deliberate shared-contract forward declaration listed in PR2 scope. Acceptable (see Suggestions).
+
+**Lines that could be removed:** ~0. **Unnecessary abstractions:** none. **YAGNI violations:** none
+material. **Complexity verdict:** Already minimal.
 
 ---
 
@@ -26,96 +156,104 @@ There are **zero critical issues** and **zero architecture violations**. The fin
 
 None.
 
-No null-safety hazards (no force-unwraps in `lib/`; the only `!` usages are in test fixture helpers and regex-match-guarded code), no missing disposal (interceptors hold no resources; the `Dio` lifecycle is owned by the T-17 provider, correctly deferred), no breaking changes (the `failure.dart` edit is purely additive), and no missing tests for new units.
-
 ---
 
 ## 🟡 Important — Should Fix
 
-### 1. `test/.../poke_api_service_test.dart` — endpoint assertions don't pin the **base-path** segment, so a regression dropping `/api/v2` would pass
+- **`pokemon_dao.dart:11-14` & `_heightPredicate` — the three-bucket partition is encoded as two
+  independent constants with no boundary tests.** `_shortMaxDecimetres = 10` and
+  `_tallMinDecimetres = 20` define a single partition of one axis, but *medium* is the implicit gap
+  between them (`>= 10 && < 20`). The current tests use heights 6/7/9/13/21 — **none hit the exact
+  boundaries 10 or 20**. A future edit to one bound without the other would silently create an overlap
+  or a hole that no test would catch.
+  - Why: boundary-off-by-one is the classic bucket bug, and the partition's correctness is asserted
+    nowhere at the seam.
+  - Fix: add boundary-value tests — `height: 9 → short`, `height: 10 → medium` (not short),
+    `height: 19 → medium`, `height: 20 → tall` (not medium). A parameterized one-row-per-boundary test
+    closes the gap cheaply.
 
-- **File:** `test/features/pokemon/data/services/poke_api_service_test.dart:18,28,...`
-- The helper `path()` returns `adapter.lastOptions!.uri.path` and assertions use `endsWith('/pokemon')`, `endsWith('/pokemon/1')`, etc. Because `@RestApi` paths begin with a leading `/`, a future mistake that drops or mangles the `https://pokeapi.co/api/v2/` base (or a Retrofit upgrade that changes leading-slash join semantics) would still satisfy `endsWith`. The test verifies the *suffix*, not the *full* resolved URL.
-- **Why it matters:** the service's whole job is to hit the *correct* absolute URL. The plan's T-07 acceptance is "each endpoint hits the expected path + query." `endsWith` under-specifies that.
-- **Fix:** assert the full path or include the base segment, e.g. `expect(path(), '/api/v2/pokemon/1')` (or `expect(adapter.lastOptions!.uri.toString(), 'https://pokeapi.co/api/v2/pokemon/1')`). One representative endpoint asserting the full URL plus the existing suffix checks would be enough.
+- **The all-three-filters-combined branch is untested.** Each filter dimension is covered in isolation
+  (types, weaknesses, height, generation) and one pair is covered (types + generation), but a single
+  `PokemonFilter` with `types` **and** `weaknesses` **and** `height` all set is never exercised. Line
+  coverage is 100%, which hides this because every *line* runs across different tests; the specific
+  *combination* (all `where` clauses AND-composed together) is the one most likely to expose an
+  accidental clause-ordering or short-circuit bug.
+  - Why: composition is exactly where SQL predicate bugs hide (e.g. an `OR` that should be `AND`, or a
+    clause silently dropped).
+  - Fix: one test asserting a fully-loaded filter returns the correct intersection (and a zero-result
+    variant).
 
-### 2. `error_mapper_test.dart` — the "all 8 `DioExceptionType` values" honesty guarantee is **not** literally complete
-
-- **File:** `test/core/network/error_mapper_test.dart`
-- The plan (T-06, L186-187) states: *"Tests still enumerate **all 8** `DioExceptionType` values explicitly … so coverage is honest and any future remap is a loud test change."* The test covers `connectionError`, the three timeouts, `badResponse`, `cancel`, `badCertificate`, `unknown` — that is **7 of 8**. `DioExceptionType.badResponse` is exercised via status codes, so all enum *cases* in `_mapDioException` are hit, but the explicit per-value enumeration the plan promises is one short of literal (the timeouts are grouped into a single test rather than asserted as three named cases, which slightly dilutes the "loud test change" intent for a future re-map of, say, `sendTimeout`).
-- **Why it matters:** this is the stated mechanism for making a future failure re-mapping a *loud* test change. Coverage is 100% by line, but the plan's own honesty bar is "explicit per value."
-- **Fix:** add a one-line assertion per enum value (a `for (final type in DioExceptionType.values)` table, or simply name the three timeout cases individually). Cheap, and it makes the guarantee literal.
-
-### 3. Logging interceptor's `onResponse` / `onError` log branches are passed-through but **not behaviorally asserted**
-
-- **File:** `test/core/network/interceptors/logging_interceptor_test.dart`
-- The two tests confirm a success passes through and an error is not swallowed — good, those are the load-bearing behaviors. But the `onResponse` and `onError` *log* statements are reached only incidentally; the test asserts nothing about logging and would still pass if the bodies were emptied (so long as `handler.next(...)` remained). This is acceptable for a logging side effect (over-asserting log strings is brittle), but it means "100% line coverage" here is coverage-without-behavior on the log lines specifically.
-- **Why it matters:** minor — it is the one place in PR1 where covered lines aren't behaviorally pinned. Worth a note so the 100% figure is read accurately.
-- **Fix (optional):** either accept as-is (logging is a deliberately untested side effect) or, if you want the assertion, capture via `dart:developer` is awkward; a cleaner approach is to inject a `void Function(String)` sink. Given YAGNI, **accepting as-is is reasonable** — flagging only so the test-quality claim is honest.
+- **`app_database.dart` `_openConnection()` + `MigrationStrategy` are untested (4/36 lines covered).**
+  The native/web connection factory and `onCreate → createAll()` run only in production, never in the
+  in-memory test path. The web `DriftWebOptions` URIs (`sqlite3.wasm` / `drift_worker.js`) are a
+  runtime contract with the committed assets; a typo here fails only at runtime on web.
+  - Why: low-risk for a v1 schema, but the web-asset URI binding is a real runtime contract.
+  - Fix: acceptable to leave as-is given the documented `flutter build web` validation (T-09 acceptance
+    says "validated on a real web target"). Optionally annotate `_openConnection()` with
+    `// coverage:ignore-start/end` + a comment ("platform glue, validated by `flutter build web`") so
+    the file's coverage number reflects only testable logic instead of dragging the slice average down.
 
 ---
 
 ## 🔵 Suggestions — Nice to Have
 
-### A. Five fixtures are committed in PR1 but unused until PR3
+- **`cache_policy.dart` has no consumer in PR2.** A deliberate shared-contract forward declaration for
+  PR3 — fine, and it documents the TTL design alongside the tables. If you prefer zero dead code per
+  slice, it could move to PR3 where its first consumer lives. No action required; flagging for
+  awareness only.
 
-- **Files:** `test/fixtures/{encounters_bulbasaur, pokemon_eevee, species_eevee, type_electric, type_poison}.json`
-- These are clearly pre-staged for PR3 mapper tests (Bulbasaur Grass/Poison → 4× Psychic needs `type_poison`; the branching Eevee tree needs `pokemon_eevee`/`species_eevee`). Landing them now is defensible (one fixture-gathering pass), but strictly they are YAGNI-in-PR1: a reviewer sees committed test assets with no consumer. **Suggestion:** either add a one-line note in the PR description ("fixtures pre-staged for PR3 mappers") or defer them to PR3. Not worth blocking.
+- **`pokemon_dao.dart:17` `_allDigits` regex `^\d+$`.** `\d` in Dart matches only ASCII `0-9`, so this
+  is correct. A one-line comment noting that full-width/Unicode digits are intentionally *not* treated
+  as numeric search would prevent a future "fix."
 
-### B. `QueueHttpAdapter.fetch` ignores `requestStream` / `cancelFuture`
+- **Number search uses `int.parse(term)` after the `^\d+$` guard.** Safe for the National-Dex range,
+  but a pathologically long all-digits query would throw on `int.parse` overflow before any match.
+  Extremely unlikely from a search box; switching to `int.tryParse` with an empty-result fallback would
+  be bulletproof and is a one-liner. Optional.
 
-- **File:** `test/helpers/queue_http_adapter.dart:24-35`
-- The fake correctly implements the contract for the GET-only surface under test. No action needed; noting only that if a future test needs to assert request bodies or cancellation, this helper will need extension. Fine as scoped.
+- **`watchSummaries` test asserts only `lengths == [0, 1]`.** Strong enough to prove reactivity.
+  Asserting the *content* of the second emission (the inserted id), not just its length, would add one
+  more nine of confidence against an emission firing with stale rows.
 
-### C. `dio_client_test` asserts interceptor *presence* but not *order*
-
-- **File:** `test/core/network/dio_client_test.dart:17-23`
-- The factory's doc comment documents a deliberate order (rate-limit → retry → logging) and the order is functionally important (429 handling vs. transient-retry vs. logging). The test asserts each interceptor exists exactly once but not their relative order. **Suggestion:** add `expect(dio.interceptors.map((i) => i.runtimeType).toList(), [RateLimitInterceptor, RetryInterceptor, LoggingInterceptor])` to lock the documented contract. (The two interceptors don't compound — `RetryInterceptor._isTransient` returns false for 429, `RateLimitInterceptor` returns early for non-429 — so order is not a correctness bug today, but it is a documented intent worth pinning.)
-
-### D. `idFromUrl` parses by "last non-empty segment" — robust, but untested against query-string URLs
-
-- **File:** `lib/features/pokemon/data/dtos/named_api_resource_dto.dart:27-31`
-- The helper is correct for resource URLs like `/evolution-chain/67/`. The list response's `next` cursor (`.../pokemon?offset=20&limit=20`) would parse its last segment as `pokemon?offset=20&limit=20` → `int.tryParse` → `null`, which is harmless (nobody calls `idFromUrl` on a cursor). Just noting the helper is single-purpose and the tests cover the cases that matter. No change required.
+- **Fold the height-boundary tests (Important #1) into a single parameterized table**
+  (`[(9, short), (10, medium), (19, medium), (20, tall)]`) so the partition contract is explicit and
+  self-documenting.
 
 ---
 
 ## Simplicity Assessment
 
-- **Lines that could be removed:** ~0 from `lib/`. The production code is already minimal. (Five unused fixtures could be deferred to PR3 — finding A — but they're test assets, not code.)
-- **Unnecessary abstractions:** None. The `PokemonRemoteDataSource` interface is justified (DIP + it enables PR3's fake-based repository tests, and matches Tech Spec §8.4 — the plan explicitly weighed and kept it over inlining). The `_guard` helper genuinely earns its keep: it dedupes the identical `try/on DioException/on FormatException` across all six methods (six call sites = well past rule-of-three). `mapError` is a pure top-level function, not a needless class. The `ErrorMapper`/interceptor split is the right granularity.
-- **YAGNI violations:** None in `lib/`. The DTOs model the full external contract faithfully (per the `abstraction-vs-fidelity` principle — faithful external, lean internal), which is correct, not over-modeling; unconsumed fields (`stats`, `effort`, `captureRate`, etc.) are part of the honest wire contract and feed PR3.
-- **Complexity verdict:** **Already minimal.** Interceptors use early-returns, no deep nesting; the HTTP-date parser is a clean regex + lookup table with a documented web-safe rationale.
+- **Lines that could be removed:** ~0 (the unified `driftDatabase()` choice already deleted the three
+  planned connection-glue files).
+- **Unnecessary abstractions:** none. `PokemonLocalDataSource` is earned (DIP for PR3's fakes); the
+  DAO is concrete and single-purpose.
+- **YAGNI violations:** none material (`cache_policy.dart` is a deliberate forward declaration).
+- **Complexity verdict:** **Already minimal.**
 
 ## Testing Assessment
 
-- **New code with tests:** ✅ Every PR1 unit has a corresponding test file (dio_client, error_mapper, all 3 interceptors, service, datasource, all 7 DTOs). Coverage reported 100%.
-- **Test quality:** **Meaningful.** Round-trip DTO tests use *real* PokéAPI fixtures (`base_experience`, `is_hidden`, `front_default`, `official-artwork` confirm `field_rename: snake` + the explicit `@JsonKey` are genuinely exercised). Interceptors are tested for both success-after-retry and give-up-after-cap, plus the negative cases (non-transient not retried, non-429 ignored). The `failure_test` deliberately forces the structural `==` branch instead of the `identical()` short-circuit — a sign of careful coverage, not coverage-gaming. No tautologies (`expect(true, isTrue)`), no mock-everything-test-nothing, no assertion-free tests.
-- **Edge cases:** Strong. TE-10 missing-field tolerance is tested at the DTO level (Pokémon with only required scalars; list with absent `results`); genderless Ditto (`gender_rate: -1`); empty encounters array; branching (Eevee, 8 evolutions) and linear (Bulbasaur) evolution chains; type immunity (Ground/Electric). Gaps are precision (findings 1–3), not coverage holes.
-- **State-management test coverage:** N/A — no Bloc/Cubit/Riverpod notifiers in PR1 (provider wiring is correctly deferred to T-17/Camada 2).
-- **UI component test coverage:** N/A — PR1 ships no UI (correct for this slice).
+- **New code with tests:** ✅ DAO, `summary_encoding`, and `PokemonFilter` all tested.
+  Untested-by-design: `app_database.dart` connection/migration glue (manual web validation per plan);
+  `cache_policy.dart` / `sort_criteria.dart` (constants/enum — no logic).
+- **Test quality:** **Meaningful.** Real in-memory SQL, behavior-focused, edge cases covered (accents,
+  leading zeros, zero-result, conflict-update, reactive emit). No tautologies, no over-mocking.
+- **State management test coverage:** N/A (no state units in this slice).
+- **DAO / data-source test coverage:** **Complete** on line coverage (100% on `pokemon_dao.dart`),
+  with two small *branch* gaps worth closing: exact height boundaries (10/20) and the
+  all-three-filters-combined case.
 
-## Architecture & Conventions — Verdict
+---
 
-- **Layer separation:** ✅ Clean. No presentation imports in the data layer; `error_mapper.dart` is correctly quarantined in `core/network/` (imports dio) so `core/error/` stays dio-free for the domain. Datasource → service → DTO dependency direction is correct; the domain never sees a `DioException`.
-- **Immutability:** ✅ All DTOs are Freezed; `Failure`/`Result` are `@immutable` sealed hierarchies with const constructors.
-- **Naming (5-second rule):** ✅ `PokemonRemoteDataSource`, `RateLimitInterceptor`, `ErrorMapper`/`mapError`, `QueueHttpAdapter` all read instantly. No `Manager`/`Helper`/`Handler` smells. File names are snake_case and match their primary export.
-- **Error handling:** ✅ `only_throw_errors` satisfied via `Failure implements Exception` (the sole, documented, additive edit). No bare async without handling; `_guard` centralizes conversion. The catch-all → `ServerFailure` (not `NetworkFailure`) decision is correctly implemented and matches the plan's anti-"mislabel as offline" rationale.
-- **Lint suppressions:** ✅ The single `// ignore: prefer_initializing_formals` is genuinely necessary (verified: removing it produces an info on this host) and carries an explanatory comment — meets the VGV "no suppression without a reason" bar.
-- **Dependency pins:** ✅ `retrofit_generator: 10.2.6` (exact) and `dio: ^5.9.0` / `retrofit: ^4.9.2` match the plan's analyzer-9-stable-codegen rationale, with the reasoning captured in pubspec comments.
+## Decisions verified against the brief (correctly implemented, not flagged)
 
-## Plan Adherence — Spot Checks
-
-| Plan decision | Implemented? |
-| --- | --- |
-| `ErrorMapper` in `core/network/` (imports dio) | ✅ |
-| Catch-all (`cancel`/`badCertificate`/`unknown`/other-4xx) → `ServerFailure` | ✅ |
-| Retry only transient + 5xx, max 3, exp backoff `baseDelay·2ⁿ`; never 4xx/parse | ✅ |
-| 429 honors `Retry-After` (seconds **and** HTTP-date), bounded by cap | ✅ (pure-Dart IMF-fixdate parser, web-safe) |
-| `field_rename: snake` repo-global + explicit `@JsonKey` for `official-artwork` | ✅ |
-| `/encounters` returns top-level `List<LocationAreaEncounterDto>` | ✅ |
-| Recursive `ChainLinkDto.evolvesTo`; all evolution triggers nullable | ✅ |
-| Datasource throws mapped `Failure`, never raw `DioException` | ✅ |
-| `failure.dart` edit additive (`implements Exception` only) | ✅ (confirmed via diff: only change) |
-| `pubspec.lock` committed | ✅ (present in diff) |
-
-**Deviation noted (acceptable):** the plan sketch listed `PokemonDto.sprites` as non-nullable (`PokemonSpritesDto sprites`); the implementation makes it `PokemonSpritesDto?` nullable. This is *more* TE-10-tolerant and matches the missing-field test — a correct improvement over the plan sketch, not a regression.
+- (a) `drift_dev` pinned **exact 2.31.0** — confirmed in `pubspec.yaml` and `pubspec.lock`; analyzer
+  stayed 9.0.0.
+- (b) Unified `driftDatabase()` from `drift_flutter` instead of manual conditional-export files —
+  confirmed; web handled via `DriftWebOptions`.
+- (c) `PokemonDao` **not** registered in `@DriftDatabase(daos:)`, constructed manually — confirmed;
+  avoids the `core/database → features/domain` back-edge.
+- (d) DAO returns **raw Drift rows**; repository (PR3) maps to entities — confirmed.
+- (e) Height thresholds (short <10, medium 10–19, tall ≥20 dm) — confirmed and consistent between the
+  DAO consts and the tests (only the *exact boundary* values lack tests; see Important #1).
+- (f) Repository, cache mappers, and `weaknessMask`/`payloadJson` population are PR3 — absence *not*
+  flagged; `weaknessMask` correctly defaults to `0` and `payloadJson` is treated as opaque TEXT.
