@@ -1,7 +1,7 @@
 ---
-title: "Code Simplicity / YAGNI Review — PR3 (feature/foundation-part3)"
-date: 2026-05-24
-scope: "lib/core/pokemon/pokemon_type_id.dart, lib/app/theme/{app_colors,app_typography,app_theme,pokemon_type_theme}.dart, lib/app/app.dart, test/app/theme/pokemon_type_theme_test.dart, test/app/app_boot_test.dart"
+title: "Code Simplicity / YAGNI Review — PR1 (feature/data-part1)"
+date: 2026-05-25
+scope: "lib/core/network/**, lib/features/pokemon/data/dtos/*.dart, lib/features/pokemon/data/services/poke_api_service.dart, lib/features/pokemon/data/datasources/pokemon_remote_data_source.dart, lib/core/error/failure.dart, build.yaml, pubspec.yaml, test/** for the above"
 reviewer: claude-sonnet-4-6 (simplicity agent)
 ---
 
@@ -9,9 +9,11 @@ reviewer: claude-sonnet-4-6 (simplicity agent)
 
 ### Core Purpose
 
-Wire §10 design tokens into a `ThemeData`, define per-type colors and provisional
-backgrounds for all 18 `PokemonTypeId` values, and apply the theme globally. No
-business logic — pure presentational constants and a single accessor.
+Establish the remote network stack: a configured Dio client, three hand-rolled interceptors
+(rate-limit, retry, logging), a Retrofit service that maps six PokéAPI endpoints to typed return
+values, Freezed DTOs that faithfully represent the wire format, a thin data source that wraps the
+service and translates transport errors into typed `Failure` values, and `failure.dart` as the
+app-wide error vocabulary.
 
 ---
 
@@ -23,127 +25,115 @@ None.
 
 ### Important
 
-#### 1. `app_theme.dart:17-24` — `textTheme` slot mapping is speculative for five of six styles
+#### 1. `poke_api_service.dart:16` and `dio_client.dart:7` — `baseUrl` is declared in two places; one is dead
 
-- **File:** `lib/app/theme/app_theme.dart:17-24`
-- **Issue:** The `TextTheme` block maps six `AppTypography` styles to six Material 3 text
-  roles (`displaySmall`, `headlineMedium`, `titleMedium`, `bodyLarge`, `labelMedium`,
-  `labelSmall`). The plan explicitly notes that widgets may also reference `AppTypography`
-  styles directly. No widget consumer exists yet. The mapping therefore needs justification
-  on its own merits — will the badge label widget call `Theme.of(context).textTheme.labelMedium`
-  or `AppTypography.pokemonType`? If the answer is "direct reference", the `textTheme` entries
-  are pre-wired for consumers that may never arrive, which is a speculative coupling.
-- **Why this is Important rather than Critical:** the plan-mandated reason for `AppTypography`
-  existing ahead of consumers is explicit and accepted. The issue is narrower: the
-  *slot assignments* (which Material role gets which style) are an arbitrary commitment made
-  without a consumer to validate them. A future widget written against `textTheme.labelMedium`
-  for the badge label is now locked to that choice even if it turns out `labelSmall` would
-  have been closer or a custom `DefaultTextStyle` would have been cleaner. There is also a
-  concrete mismatch to note: `displaySmall` is canonically used for large display text at
-  the top of a screen — mapping `applicationTitle` (32 sp, Bold) there is reasonable. But
-  `headlineMedium` for `pokemonName` (26 sp) and `titleMedium` for `filterTitle` (16 sp,
-  Bold) are debatable; `titleLarge` is the conventional Material 3 slot for bold section
-  titles and `headlineMedium` is usually reserved for content-level headings, not a card
-  overlay label. These role choices are not wrong in isolation, but they were made without
-  a Figma-to-M3 mapping document backing them, and changing them after widgets are wired
-  would require touching every call site.
-- **Suggested mitigation:** Either (a) add a brief inline comment per slot explaining why
-  that Material role was chosen (e.g. `// M3 displaySmall ≈ large hero text — closest to
-  applicationTitle`), so the mapping is documented rather than implicit; or (b) defer the
-  `textTheme` wiring until the first widget consumer arrives (T-18 / badge), leaving only
-  `fontFamily` and `colorScheme` in `AppTheme.light` now, with `AppTypography` referenced
-  directly at call sites. Option (b) is the more YAGNI-faithful path and removes the risk
-  of locking in wrong slot assignments before there is evidence they are right.
-- **Estimated saving (option b):** removes 6 lines from `app_theme.dart`; `AppTypography`
-  itself stays (it is wired into the theme via `fontFamily` and used directly later).
+- **Files:** `lib/features/pokemon/data/services/poke_api_service.dart:16`,
+  `lib/core/network/dio_client.dart:7` (and `dio_client.dart:23`)
+- **Issue:** `pokeApiBaseUrl` is set both on the `Dio` options in `createPokeApiDio` and in
+  `@RestApi(baseUrl: 'https://pokeapi.co/api/v2/')`. The generated `_PokeApiService` constructor
+  assigns `baseUrl ??= 'https://pokeapi.co/api/v2/'` and then calls
+  `_combineBaseUrls(_dio.options.baseUrl, baseUrl)`. Because the Retrofit `baseUrl` field is
+  always non-null after construction and the parsed URI is absolute, `_combineBaseUrls` always
+  returns the `@RestApi` URL — the Dio `baseUrl` in `BaseOptions` is never consulted for any
+  request routed through `PokeApiService`. The `pokeApiBaseUrl` constant is only exercised by the
+  `dio_client_test.dart` assertion `expect(dio.options.baseUrl, pokeApiBaseUrl)`, which therefore
+  tests a property that has no effect on production requests.
+- **Impact:** two canonical sources for the same string, subtle misleading symmetry. If one is
+  changed without the other the application silently continues to work (whichever the Retrofit
+  service uses wins), making the mismatch hard to notice.
+- **Suggested fix:** Remove `baseUrl` from `@RestApi(baseUrl: ...)` and leave it on the
+  `Dio` options only. The Retrofit factory already accepts an optional `baseUrl` override
+  (`factory PokeApiService(Dio dio, {String? baseUrl}) = _PokeApiService`); without the
+  annotation default the constructor's `baseUrl ??=` fallback becomes `null` and
+  `_combineBaseUrls` returns `dioBaseUrl` — the correct value from `createPokeApiDio`. This
+  collapses to a single declaration.
+- **Alternative:** keep `@RestApi` as-is but remove `baseUrl: pokeApiBaseUrl` from
+  `BaseOptions` in `createPokeApiDio` (since it is never consulted), and update the
+  `dio_client_test` to not assert `baseUrl`. This avoids touching the generated code.
+- **Estimated saving:** 1 declaration + the misleading symmetry; test line adjustment is
+  net-neutral.
 
----
+#### 2. `pokemon_remote_data_source_test.dart` — two of six endpoints have no success-path test
 
-### Minor
+- **File:**
+  `test/features/pokemon/data/datasources/pokemon_remote_data_source_test.dart`
+- **Issue:** The success group covers `fetchPage`, `fetchPokemon`, `fetchEvolutionChain`, and
+  `fetchEncounters` (four of six methods). `fetchSpecies` and `fetchType` appear only in error
+  paths (`fetchSpecies` maps a 5xx → `ServerFailure`; `fetchType` maps a connection error →
+  `NetworkFailure`). The `_guard` helper is the only logic the data source owns; both missing
+  methods exercise exactly the same `_guard` path as the four covered methods, so 100 % line
+  coverage is achieved without them. However, the success assertions serve as a specification:
+  they document which DTO type each method returns and verify the pass-through. Their absence
+  means a future refactor that accidentally swaps `getSpecies`/`getType` inside `_guard` would
+  go undetected.
+- **Suggested fix:** Add two success tests (one for `fetchSpecies`, one for `fetchType`) to
+  the existing `'PokemonRemoteDataSource success'` group following the existing pattern. This
+  adds ~10 lines but eliminates the asymmetry and strengthens the specification value of the
+  test suite.
+- **Impact:** no LOC reduction; the omission is a gap in test completeness, not excess code.
 
-#### 2. `app_colors.dart:24` — opacity comment states what the code already shows
+#### 3. `test/fixtures/` — five fixture files are never loaded by any test
 
-- **File:** `lib/app/theme/app_colors.dart:24`
-- **Issue:** `/// Modal scrim over sheets. §10.1 specifies black with an unspecified opacity;
-  this uses the Material barrier default (54%).` The "54%" figure is derivable from the
-  `0x8A` alpha channel in `Color(0x8A000000)` (`0x8A / 0xFF ≈ 54.1%`). The comment adds
-  the rationale ("Material barrier default") which is genuinely useful, but the "54%"
-  restatement is redundant once you know `0x8A` is the canonical Material barrier value.
-- **Suggestion:** Trim to: `/// Modal scrim over sheets (§10.1 black; alpha = Material
-  barrier default 0x8A).` — keeps the rationale, drops the redundant percentage.
-- **Estimated saving:** one phrase; cosmetic.
-
-#### 3. `app_colors.dart:5` — `const AppColors._()` private constructor is unreachable
-
-- **File:** `lib/app/theme/app_colors.dart:5`
-- **Issue:** `abstract final class AppColors` with `const AppColors._()` — the `abstract`
-  modifier already prevents instantiation; the private constructor is unreachable dead code.
-  The same pattern appears in `AppTypography` (`app_typography.dart:7`) and `AppTheme`
-  (`app_theme.dart:8`) and `PokemonTypeTheme` (`pokemon_type_theme.dart:14`).
-- **Context:** This is an idiomatic Dart pattern used by some teams as an explicit signal
-  that no subclassing is intended. However, `abstract final` already communicates both
-  prohibitions — `abstract` blocks instantiation and `final` blocks extension. The private
-  constructor adds no enforcement beyond what the class modifiers already provide, and it
-  will never be called.
-- **Suggestion:** Remove the four `const ClassName._()` constructors across the four
-  token-namespace classes. The resulting classes remain uninstantiable and non-extensible.
-  This is a minor style preference; if the team treats this constructor as a deliberate
-  namespace-signal convention, keep it and add a shared comment explaining the convention
-  once rather than four silent copies.
-- **Estimated saving:** 4 lines; zero functional impact.
-
-#### 4. `pokemon_type_theme_test.dart:31` — uniqueness assertion partially duplicates the map definition
-
-- **File:** `test/app/theme/pokemon_type_theme_test.dart:31`
-- **Issue:** `expect(colors, hasLength(18))` verifies that all 18 `styleOf` calls return
-  distinct `Color` values. This is a useful guard against copy-paste errors in `_colors`.
-  However, the same test also calls `expect(PokemonTypeId.values, hasLength(18))` on
-  line 30 — this asserts the enum count, which is a compile-time fact. If the enum gains a
-  19th value, the compiler enforces that `_colors` handles it (because `_colors[type]!`
-  would throw at runtime on the missing entry, and the uniqueness test would catch a
-  duplicate). The enum-length assertion provides no additional safety.
-- **Suggestion:** Remove `expect(PokemonTypeId.values, hasLength(18))` (line 30). The
-  colors-set length assertion on line 31 is sufficient: if a new type is added without a
-  color entry the `!` force-unwrap throws; if two types share a color the set shrinks. The
-  18-hard-code in `hasLength(18)` would also become a maintenance burden every time a type
-  is added.
-- **Estimated saving:** 1 line.
+- **Directory:** `test/fixtures/`
+- **Issue:** Five JSON fixtures exist on disk but are not referenced by any `*.dart` test
+  file: `encounters_bulbasaur.json`, `pokemon_eevee.json`, `species_eevee.json`,
+  `type_electric.json`, `type_poison.json`. `fixtureJson`/`fixtureJsonArray` calls in all
+  test files were audited; none of these five filenames appear.
+- **Why this matters:** dead fixture files carry two costs — they mislead a reader into thinking
+  there is a test that uses them, and they will need updating when the real API shapes change.
+- **Suggested fix:** Delete the five files. If they were prepared for future tests (PR2/PR3),
+  they should be committed alongside the tests that use them.
+- **Estimated LOC reduction:** 5 JSON files; no Dart LOC impact, but reduces fixture
+  maintenance surface.
 
 ---
 
 ### Suggestions
 
-#### 5. `pokemon_type_theme.dart` — `_exactBackgrounds` map with two entries could be inlined
+#### 4. `rate_limit_interceptor_test.dart:96-110` — `_expectImmediateRetry` extracted as top-level function but called exactly once
 
-- **File:** `lib/app/theme/pokemon_type_theme.dart:40-43`
-- **Issue:** `_exactBackgrounds` is a `const Map` with exactly two entries (Grass and Fire).
-  It exists solely to feed the `??` lookup in `styleOf`. The two entries could be expressed
-  as a direct `if` branch without a map allocation:
-  ```dart
-  final backgroundColor = switch (type) {
-    PokemonTypeId.grass => const Color(0xFF8BBE8A),
-    PokemonTypeId.fire  => const Color(0xFFFFA756),
-    _                   => Color.lerp(color, const Color(0xFFFFFFFF), 0.5)!,
-  };
-  ```
-  This removes the private map, makes the two exact values immediately visible alongside
-  the derivation formula, and avoids a map lookup for the common case (16 out of 18 types
-  hit the `_` branch). The resulting code is 1 line shorter and reads as a single decision.
-  The switch expression is also more obviously exhaustive than a nullable map lookup with a
-  `??` fallback.
-- **Note:** This is a suggestion, not a demand — the current structure is clear and the
-  map will grow to 18 entries once T-18 reconciles backgrounds. If that growth is expected
-  soon, inlining now and re-extracting later adds churn. Given T-18 is planned, keeping the
-  map as a holding area for the reconciled values is defensible.
+- **File:** `test/core/network/interceptors/rate_limit_interceptor_test.dart:48,96-110`
+- **Issue:** `_expectImmediateRetry` is a 14-line top-level function called only once (line 48
+  via `return _expectImmediateRetry(wire, rateLimited)`). The extraction requires threading the
+  `wire` and `rateLimited` closures as parameters, adding indirection that exists solely to
+  satisfy a single call site. The test body inside would be clearer inlined, with a comment
+  explaining the `now()` injection.
+- **Why this is a Suggestion rather than Important:** the extraction may have been motivated by
+  a linter rule or by anticipating a second HTTP-date variation test. Neither is present.
+  Inlining is a trivial mechanical change with no semantic effect.
+- **Estimated saving:** removes the function signature + parameter threading (~6 lines of
+  scaffolding); the assertion body stays.
 
-#### 6. `app_boot_test.dart:4` — `app_colors` import is used for a single constant assertion
+#### 5. `failure_test.dart:25-29` — `identical(a, b) isFalse` assertion tests Dart internals, not `Failure`
 
-- **File:** `test/app/app_boot_test.dart:4`
-- **Issue:** `import 'package:pokedex/app/theme/app_colors.dart'` is imported to assert
-  `app.theme!.scaffoldBackgroundColor == AppColors.backgroundWhite` (line 16). This is a
-  good assertion — it verifies the theme is wired correctly, not just that it is non-null.
-  The import is justified; noted here only to confirm it was evaluated and found to be
-  load-bearing. No action needed.
+- **File:** `test/core/error/failure_test.dart:25-29`
+- **Issue:** The equality test constructs two `NetworkFailure` instances via runtime string
+  concatenation (`['off','line'].join()`) to defeat const canonicalization, then asserts
+  `identical(a, b) isFalse` before asserting `a == b`. The `identical` check is verifying that
+  Dart did not constant-fold the two instances — it is a meta-test of Dart's const interning
+  behavior, not of `Failure`'s `==` operator. The structural `==` path in `Failure` is already
+  exercised by the `equals(b)` assertion that follows; the `identical` check adds noise without
+  testing any app logic.
+- **Suggested fix:** Remove the `identical(a, b) isFalse` expectation and the associated
+  comment. The remaining `expect(a, equals(b))` and `expect(a.hashCode, equals(b.hashCode))`
+  are sufficient.
+- **Estimated saving:** 3 lines.
+
+#### 6. `rate_limit_interceptor_test.dart` — positive-seconds `Retry-After` branch is untested
+
+- **File:** `test/core/network/interceptors/rate_limit_interceptor_test.dart`
+- **Issue:** The `_retryAfter` method in `RateLimitInterceptor` has a branch
+  `seconds <= 0 ? Duration.zero : Duration(seconds: seconds)`. The only numeric test uses
+  `retryAfter: '0'`, which exercises the `Duration.zero` arm. The `Duration(seconds: seconds)`
+  arm for a positive value is never exercised by a test. In isolation this is low risk (the
+  branch is a straightforward `Duration` constructor call), but it is a code path that
+  would silently introduce an actual `await Future.delayed` in future test runs if a
+  production fixture were used with a non-zero value.
+- **Suggested fix:** Add one test case with `retryAfter: '0'` replaced by a positive value
+  (`retryAfter: '1'`) combined with `fallbackDelay: Duration.zero` so no real time is waited,
+  or alternatively rename the existing test to clarify it only covers the zero-seconds edge.
+  Alternatively, set `baseDelay` to cover this inline in an existing test.
+- **Estimated saving:** none (addition, not removal); noted for coverage completeness.
 
 ---
 
@@ -151,34 +141,40 @@ None.
 
 None confirmed. The following were evaluated and ruled out:
 
-- **All 18 `PokemonTypeId` enum values** — the full set is §8.2-mandated; every value has
-  a corresponding `_colors` entry and is exercised by the uniqueness test. Not YAGNI.
-- **`typedef PokemonTypeStyle`** — plan-mandated; the `(color, backgroundColor)` record
-  shape is the deliberate T-18 migration anchor. The comment calling out the T-18 promotion
-  path is load-bearing context, not rot. Keep.
-- **`AppTypography` ahead of widget consumers** — deliberate token-library decision per
-  plan. `AppTypography` is wired into `AppTheme.light` via `textTheme` (see Important §1
-  above for the slot-mapping concern, which is separate from whether the class belongs here).
-- **18 enum value `///` doc comments** — required by `public_member_api_docs`. Not
-  over-engineering; the linter enforces them.
-- **`abstract final class` with static const members** — intended namespace pattern per
-  deliberate decisions. Not over-engineering.
-- **`PokemonTypeId` in `core/` rather than `app/theme/`** — deliberate placement to avoid
-  the domain→presentation dependency inversion at T-14. Correct and documented.
+- **`_guard` helper in `PokemonRemoteDataSourceImpl`** — six identical `try/catch` call sites;
+  the extraction is the correct DRY response, not premature abstraction. Explicitly accepted
+  per scope notes.
+- **Hand-rolled retry / rate-limit interceptors** — deliberate over `dio_smart_retry`; accepted
+  per scope notes.
+- **Hand-rolled IMF-fixdate parser** — deliberate for web safety; accepted per scope notes.
+- **All DTO fields including `effort`, `baseHappiness`, `hatchCounter`** — faithfully modelling
+  the PokéAPI wire format is the stated design decision; accepted per scope notes.
+- **`CacheFailure` declared but not yet used in PR1** — `failure.dart` is the shared
+  error-vocabulary contract for the whole data layer. `CacheFailure` is needed in PR2 (local
+  data source). Pre-declaring it alongside the rest of the vocabulary is consistent with how
+  the domain-enabler contracts are handled (`PokemonRepository` interface, `PokemonEntity`).
+  Not a YAGNI violation.
+- **`abstract interface class PokemonRemoteDataSource`** — used to enable Mocktail mocking in
+  `pokemon_remote_data_source_test.dart`. Justified by the concrete test need at this PR.
+- **`@RestApi(baseUrl: ...)` annotation on `PokeApiService`** — the annotation is needed to
+  generate the `baseUrl ??= ...` fallback in `_PokeApiService`, which protects callers that
+  construct the service with a bare `Dio` (e.g. in tests). The redundancy with
+  `createPokeApiDio` is flagged under Important §1 but the annotation itself is not YAGNI.
 
 ---
 
 ### Final Assessment
 
-**Total potential LOC reduction:** ~12 lines (6 from deferring `textTheme` wiring,
-4 from removing unreachable private constructors, 1 from the redundant enum-length
-assertion, 1 from trimming the modal scrim comment). The `_exactBackgrounds` refactor
-(suggestion §5) is a wash on lines but improves local readability.
+**Total potential LOC reduction:** ~10 lines of dead/redundant code (1 from collapsing the
+duplicate `baseUrl` declaration, 3 from removing the `identical` assertion in the failure test,
+5 dead fixture files). The two missing success-path tests in `pokemon_remote_data_source_test`
+represent an addition (~10 lines), not a removal.
 
-**Complexity score:** Low. The token classes are flat static-const bags; the accessor
-is a two-step lookup with a documented fallback; the tests are straightforward.
+**Complexity score:** Low. Every component has a single clear responsibility; the interceptors
+follow a uniform structure; the DTOs are flat frozen value objects; the data source is a thin
+delegation layer. No unnecessary abstractions or premature generalization was found.
 
-**Verdict:** Ready to merge. One important finding (speculative `textTheme` slot mapping)
-is worth addressing before consumers arrive — either document the role rationale inline or
-defer wiring until T-18; it does not block this PR but will be harder to revisit once
-widgets reference `Theme.of(context).textTheme.*` directly.
+**Verdict:** Ready to merge. The dual `baseUrl` declaration (Important §1) is the only
+structural issue worth addressing before the provider wiring in T-17 locks in the pattern.
+The two missing success-path tests (Important §2) and the five unused fixture files
+(Important §3) are the next priority; neither blocks the PR.
