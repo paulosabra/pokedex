@@ -8,6 +8,7 @@ environment:
   sdk: ^3.12.0
 
 dependencies:
+  connectivity_plus: ^7.1.1
   dio: ^5.9.0
   # drift + drift_dev are pinned exact to the analyzer-9 stable codegen line.
   # drift_dev 2.32.0 jumps to analyzer ^10, which would drag freezed/riverpod
@@ -20,6 +21,7 @@ dependencies:
   flutter_riverpod: ^3.0.0
   freezed_annotation: ^3.0.0
   json_annotation: ^4.11.0
+  meta: ^1.16.0
   retrofit: ^4.9.2
   riverpod_annotation: ^4.0.0
   sqlite3_flutter_libs: ^0.5.24

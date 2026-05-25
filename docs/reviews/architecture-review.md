@@ -1,142 +1,274 @@
-# Architecture Review — PR2 (Data Layer · Drift Cache + DAO/Local DataSource)
+# Architecture Review — PR3 (data-layer epic)
 
-**Branch:** `feature/data-part2` → `epic/data-layer`
-**Tasks:** T-09 (Drift cache) + T-10 (DAO / local data source); T-14 enablers (`sort_criteria`, `pokemon_filter`) pulled forward.
-**Plan:** `docs/plan/2026-05-25-feat-infrastructure-data-layer-plan.md` · **Tech Spec:** `docs/project/02-tech-spec.md §6, §8.4`
-**Reviewer scope:** PR2 source only (uncommitted, untracked). Generated `*.g.dart`/`*.drift.dart`/`*.freezed.dart` ignored. Mappers/repository (PR3) absence not flagged.
-**Date:** 2026-05-25
+**Branch:** `feature/data-part3` · **Scope:** T-14 (entities), T-15 (repository interface), T-12 (mappers), T-13 (RepositoryImpl), `connectivity_plus`
+**Standard:** VGV layered monorepo / Clean Architecture onion + the dependency rule
+**Plan:** `docs/plan/2026-05-25-feat-infrastructure-data-layer-plan.md`
+**Reviewed:** 2026-05-25
 
-## Files reviewed
-
-- `lib/core/database/app_database.dart` — Drift tables + `AppDatabase` (T-09)
-- `lib/core/database/cache_policy.dart` — TTL constants (T-09)
-- `lib/features/pokemon/domain/entities/sort_criteria.dart` — domain enum (T-14 enabler)
-- `lib/features/pokemon/domain/entities/pokemon_filter.dart` — domain freezed entity (T-14 enabler)
-- `lib/features/pokemon/data/summary_encoding.dart` — shared `normalizeName` / `typeWeaknessMask`
-- `lib/features/pokemon/data/datasources/pokemon_local_data_source.dart` — abstract interface
-- `lib/features/pokemon/data/datasources/pokemon_dao.dart` — Drift DAO impl
-- Config: `analysis_options.yaml`, `.gitignore`, `pubspec.yaml`
-- Tests (context only): `pokemon_dao_test.dart`, `summary_encoding_test.dart`, `pokemon_filter_test.dart`
+PR3 converges the PR1 (remote) and PR2 (cache) halves into pure domain entities served by a single
+cache-first `PokemonRepository`. This review confirms the dependency-rule invariants, the DIP wiring,
+the mapper translation boundary, and the cache round-trip. The architecture is sound; findings below
+are one structural smell that predates PR3 but first bites here, plus minor observations.
 
 ---
 
-## Architecture Review
+## Layer Separation
 
-### Layer Separation
+**Violations found in PR3 source: 0.** Independently verified — not relying on the author's grep.
 
-**Violations found: 0.**
+### Domain purity (CRITICAL invariant 1) — PASS for PR3 code
 
-The single hardest constraint for this PR — **no `core/` → `features/` dependency** — holds. Verified by import grep:
+`grep -rE "package:(dio|drift|retrofit|connectivity_plus|flutter)/|features/.../data/"` across
+`lib/features/pokemon/domain/**` (excluding generated `*.g.dart`/`*.freezed.dart`) returns nothing.
+The complete set of distinct imports in domain source is:
 
-- `lib/core/database/app_database.dart` imports only `package:drift/drift.dart` and `package:drift_flutter/drift_flutter.dart`. **Zero** `package:pokedex/features/...` imports. (`grep -rn "package:pokedex/features" lib/core/` → none.)
-- `lib/core/database/cache_policy.dart` has no imports at all (pure constants).
-- `lib/core/pokemon/pokemon_type_id.dart` has no imports.
+- `package:freezed_annotation/freezed_annotation.dart`
+- `package:pokedex/core/error/result.dart`
+- `package:pokedex/core/pokemon/pokemon_type_id.dart`
+- sibling `domain/entities/*.dart`
 
-This is the architecturally load-bearing decision of the PR, and it is correct: **`PokemonDao` is deliberately NOT registered in `@DriftDatabase(daos: [...])`** — it lives in `features/pokemon/data/datasources/` and is constructed manually (`PokemonDao(db)`). Registering it would force `app_database.dart` to `import` the DAO file, which lives under `features/`, inverting the layer rule. The DAO instead reaches *up the allowed direction* — `data` → `core/database` — via `DatabaseAccessor<AppDatabase>`. This is the canonical way to keep a Drift schema in a low layer while the accessor lives in a feature, and the implementation nails it.
+Generated domain files (`*.g.dart`, `*.freezed.dart`) were also checked for transitive infra leaks —
+clean (they pull only `freezed_annotation`/`json_annotation` plumbing, never dio/drift/retrofit/
+connectivity). `sort_criteria.dart` and `pokemon_filter.dart`/`pokemon_page.dart` correctly carry no
+`.g.dart` part (no `fromJson` — they are not cached), which is the right call.
 
-Per-file direction check (all legal under VGV layered / Clean Architecture):
+The `PokemonTypeId` enum is consumed from `core/pokemon/` exactly as the foundation plan intended, so
+the domain reaches a shared kernel rather than a presentation back-edge. Good.
 
-| File | Layer | Imports | Verdict |
-| --- | --- | --- | --- |
-| `core/database/app_database.dart` | core/infra | drift, drift_flutter | Clean — infra only |
-| `core/database/cache_policy.dart` | core/infra | (none) | Clean |
-| `domain/entities/sort_criteria.dart` | domain | (none — pure Dart enum) | Clean |
-| `domain/entities/pokemon_filter.dart` | domain | freezed_annotation, `core/pokemon` | Clean — meets the T-14 constraint exactly |
-| `data/summary_encoding.dart` | data | `core/pokemon` | Clean |
-| `data/datasources/pokemon_local_data_source.dart` | data | `core/database`, `domain/entities` ×2 | Clean — data may depend on core + domain |
-| `data/datasources/pokemon_dao.dart` | data | drift, `core/database`, local DS, `summary_encoding`, `domain/entities` ×2 | Clean — all permitted downstream/peer deps |
+### Data layer dependencies (CRITICAL invariant 2) — PASS
 
-**Domain purity (entities) — confirmed.** `grep` for `package:drift`/`package:dio`/`package:retrofit`/`features/.../data`/`core/database`/`core/network` across `lib/features/pokemon/domain/` returned **none**. `sort_criteria.dart` is pure Dart; `pokemon_filter.dart` imports only `freezed_annotation` + `core/pokemon/pokemon_type_id.dart`. Both meet the plan's T-14 rule ("only `freezed_annotation` + `core/pokemon`, no drift/infra") to the letter. `HeightCategory` correctly lives in the domain alongside `PokemonFilter` (it is a filter concept), while the *decimetre thresholds* that interpret it live in the data layer (`pokemon_dao.dart` `_shortMaxDecimetres`/`_tallMinDecimetres`) — the documented Tech-Spec split ("PRD defines categories, data layer owns concrete values") is honored, keeping the domain unit-agnostic.
+`pokemon_repository_impl.dart` (data) depends on: domain entities, the `PokemonRepository` interface,
+`PokemonRemoteDataSource`, `PokemonLocalDataSource`, the five mappers, `connectivity_plus`,
+`core/database` (Drift companions/rows), `core/error`, `core/pokemon`. Every one of these flows
+downward or sideways within the data ring or into the shared kernel. No data→presentation edge exists
+(there is no presentation layer yet). Correct.
 
-**`core/` stays free of feature/domain imports — confirmed.** All three core files are clean.
+Data legitimately depends on domain in three more places, all valid (data → domain is the allowed
+direction): the DAO and `PokemonLocalDataSource` import `PokemonFilter`/`HeightCategory`/`SortCriteria`;
+the mappers import the entities they produce.
 
-**Clean files: all checked files clean.**
+### `core/error` → Flutter coupling (CRITICAL invariant 1, transitive) — IMPORTANT
 
-### State Management Assessment
+`lib/core/error/failure.dart:1` imports `package:flutter/foundation.dart` (for `@immutable`). The
+domain depends on this file transitively: every entity returns through `Result<T>` (interface T-15)
+and `Result` → `Failure` → `package:flutter`. So the *pure-Dart* domain layer in fact transitively
+imports Flutter.
 
-No Riverpod/Bloc units are in scope for PR2 (state wiring is T-17 / Camada 2). The relevant analogue here is **data-source / DAO design**, assessed against the same VGV principles (naming, immutability, single responsibility, DIP, lifecycle):
+- **Provenance:** introduced in foundation commit `6df22e8 feat(core)`, hardened in `1ec3f92`
+  (PR1). It is **not** a PR3 change — `git status` shows no modification under `lib/core/`.
+- **Why flag it in PR3 anyway:** PR3 is the PR that makes the domain layer *exist* and makes it
+  depend on `Result`/`Failure`. Before PR3 nothing claimed to be a "pure Dart, no-framework" layer;
+  now `T-14`'s acceptance criterion ("no framework imports") and the plan's Principle 8 / line 633
+  ("`domain/` may import only `dart:core`, `freezed_annotation`, `core/error`, `core/pokemon`") are
+  on record — and `core/error` silently violates the spirit of that allow-list because it drags in
+  Flutter. The plan explicitly lists `core/error` as a permitted dependency *on the assumption it is
+  framework-free* (the same paragraph justifies keeping `ErrorMapper` out of `core/error` "to keep the
+  dio-free domain['s] transitive imports" clean — the identical reasoning applies to Flutter).
+- **Impact:** today, low — the app is Flutter-only, so nothing breaks. But it forecloses ever
+  extracting `domain` (or `core/error`) into a pure-Dart package, and it makes the "pure domain"
+  claim technically false. It also means a future pure-Dart unit test of an entity transitively
+  loads `package:flutter`.
+- **Fix (one line, trivial):** replace `import 'package:flutter/foundation.dart';` +
+  `@immutable` with `import 'package:meta/meta.dart';` (`meta` re-exports `@immutable` and is a
+  pure-Dart package already in the transitive set). `core/error` then becomes genuinely
+  framework-free and the domain allow-list holds literally, not just by convention.
 
-- **`PokemonLocalDataSource` (abstract interface): Correct.**
-  - Descriptive, convention-following name (`*LocalDataSource`); `abstract interface class` gives a clean DIP seam so PR3's repository can be tested against a fake (the docstring says exactly this). This matches Tech Spec §8.4's intent of "implementado via Drift DAO".
-  - **Returns raw Drift rows, no entity leakage — confirmed and correct.** Every read returns `PokemonSummaryRow?` / `PokemonDetailRow?` / `EvolutionChainRow?` / `TypeRelationRow?` or `List<PokemonSummaryRow>`; `watchSummaries` streams `List<PokemonSummaryRow>`. No `Pokemon`/`PokemonDetail` domain entity appears. Row→entity mapping is correctly deferred to PR3, exactly as the plan's reconciliation table prescribes (superseding Tech Spec §8.4's older `PokemonDetail?` return signature — the plan is the authoritative reconciliation record, so this is *not* a deviation to flag).
-  - **Business-logic placement: Correct.** Search disambiguation (numeric vs name), filter intersection, height bucketing, weakness bitmask, and ordering all live in the DAO (the data layer), reachable as SQL — not in a UI callback. RN-08 "all search/filter/sort over the cache" is satisfied at the right layer.
-  - **Single responsibility:** read/write + query/watch over the cache. Focused; no grab-bag.
+This is the single structural finding worth fixing before the layer ossifies. It is **Important**, not
+Critical, because it is a transitive/latent coupling with zero runtime effect today and a one-line
+remedy — but it should be fixed in this PR (or a fast follow) while `core/error` has exactly one
+offending line, rather than after presentation code piles on.
 
-- **`PokemonDao` (concrete impl): Correct, with two notes (see Suggestions).**
-  - `implements PokemonLocalDataSource` + `extends DatabaseAccessor<AppDatabase>` with `_$PokemonDaoMixin` — idiomatic Drift, and the `implements` keeps the abstraction honest.
-  - Query construction is factored into one private `_summaryQuery` shared by `querySummaries`/`watchSummaries` (no duplication between the one-shot and reactive paths) — good. `_heightPredicate` and `_ordering` are clean, exhaustive `switch`es over the domain enums.
-  - Lifecycle: the DAO holds no resources of its own; `AppDatabase` owns the connection and is disposed by its owner (`db.close()` in tests; provider scope in T-17). Appropriate — the DAO does not over-manage lifecycle.
+**Clean files (PR3):** all domain entities, both repository contracts, all five mappers,
+`summary_encoding.dart`, and `pokemon_repository_impl.dart` are clean on the layer rule.
 
-### Dependency Direction
+---
 
-**Direction violations: 0. Circular dependencies: 0.**
+## State Management Assessment
 
-The PR2 dependency graph flows strictly one way:
+No state management (Bloc/Riverpod) lands in PR3 — providers/use cases are T-16/T-17 (Camada 2). The
+reviewable analogue is the repository's collaborator wiring and lifecycle:
+
+- **`PokemonRepositoryImpl`: Correct.** All four collaborators (`PokemonRemoteDataSource`,
+  `PokemonLocalDataSource`, `Connectivity`, `DateTime Function() now`) are **constructor-injected**;
+  there is no global state, no service locator, no `DateTime.now()` called inline (the clock is
+  injected and defaults to `DateTime.now`, which makes TTL branches deterministically testable). This
+  is textbook DI and is exactly what enables the fakes-not-mocks repository tests the plan calls for.
+- **Naming: Correct.** `PokemonRepositoryImpl`, `pokemonFromDto`, `computeTypeEffectiveness`,
+  `summaryToCompanion` are descriptive and domain-vocabulary-aligned — no `Manager`/`Handler`/`Data*`
+  grab-bags.
+- **Business logic location: Correct.** All rules (weakness math, gender, min/max, generation ranges,
+  evolution condition derivation, sanitization) live in pure top-level mapper functions in the data
+  layer, not smeared across the repository or (later) UI. The repository orchestrates; the mappers
+  translate. Clean separation of "decide" vs "transform".
+- **Disposal/lifecycle:** the repository owns no streams/subscriptions it must dispose; it maps the
+  DAO's `watchSummaries` stream lazily (`.map`) and returns it — disposal belongs to the consumer
+  (correct, the repo did not create the source). `Connectivity` is injected, not constructed, so its
+  lifecycle is the composition root's concern (T-17). No leak.
+
+No state-management violations.
+
+---
+
+## Dependency Direction
+
+The dependency graph flows one way; **no reverse or circular edges found.**
 
 ```
-domain/entities (sort_criteria, pokemon_filter)   ← pure
-        ▲                         ▲
-        │                         │
-data/datasources (local DS, DAO) ─┘
+presentation (none yet)
         │
-        ├──► core/database (app_database, cache_policy)   [infra]
-        ├──► core/pokemon  (pokemon_type_id)              [shared leaf]
-        └──► data/summary_encoding                        [data peer]
-
-core/database ──► drift, drift_flutter ONLY  (never features/)
+        ▼
+   domain/entities  ◄──────────────┐ (the documented, intended back-edge:
+   domain/repositories (interface)  │  mappers + impl consume domain, per plan L20-24)
+        ▲              ▲            │
+        │ implements   │ produces  │
+        │              │           │
+   data/repositories/impl ── uses ─┴─ data/mappers ── uses ─ data/dtos, data/datasources
+        │
+        ▼
+   core/database, core/network, core/error, core/pokemon   (shared kernel)
 ```
 
-- **`data` → `domain`: legal and present.** The DAO and local DS depend on `PokemonFilter`/`SortCriteria`/`HeightCategory`. This is the correct direction (Clean Architecture: data may know the domain contracts it serves).
-- **`data` → `core/database`: legal.** DAO accesses the schema/companions; local DS references companion/row types from the schema.
-- **`core/database` → `features/*`: absent.** The back-edge that would break the rule does not exist (the whole reason the DAO is unregistered). Verified.
-- **No circulars.** `domain` imports nothing from `data`/`core/database`; `core` imports nothing from `features`. `summary_encoding` (data) → `core/pokemon` (leaf) only.
+- **DIP (CRITICAL invariant 3) — PASS.** `class PokemonRepositoryImpl implements PokemonRepository`
+  (`pokemon_repository_impl.dart:28`). The contract is owned by `domain/repositories/`; the
+  concretion lives in `data/repositories/`. Domain defines, data implements — the inversion is
+  correct. Likewise both datasources expose `abstract interface class` contracts that their `*Impl`
+  classes implement, so the repository depends on datasource *abstractions* (DIP all the way down),
+  which is what lets it be faked in tests.
+- **The one architectural back-edge is the intended enabler.** Mappers (T-12) and the impl (T-13)
+  consume domain entities (T-14) and the repo interface (T-15). The plan (L20-24, L680) records this
+  deliberately — domain enablers are written up-front so the data ring has contracts to satisfy. This
+  is data→domain (allowed), not domain→data. No violation.
+- **No circular dependency.** Domain never imports data; data imports domain; both import the shared
+  `core/*` kernel; `core/*` imports neither feature layer (verified — `core/database` and
+  `core/network` import only their own infra + dtos via the datasource boundary, never `domain` or the
+  repository).
 
-**Shared `summary_encoding` placement — sensible and correct.** It sits in the **data layer** (`features/pokemon/data/summary_encoding.dart`), depends only on `core/pokemon`, and exposes the two encodings (`normalizeName`, `typeWeaknessMask`) that **must agree between the PR2 DAO query and the PR3 cache mapper**. Putting the canonical bit-layout / normalization in one data-layer module that both PRs import is exactly right: it prevents the classic "writer and reader disagree on the encoding" bug, and it does not pollute the domain (the encoding is a storage/index concern, not a business rule). The DAO already consumes both (`normalizeName(term)` for search, `typeWeaknessMask(filter.weaknesses)` for the mask filter), proving the shared contract works end to end.
-
-**Clean dependencies:** all PR2 edges.
-
-### Package Structure
-
-This is a single-package app (`pokedex`), so "package structure" maps to **module/layer folder structure** plus the build/lint config that governs generated code.
-
-- **Folder placement: Complete.** Files land where the plan's target tree specifies: cache infra under `core/database/`, domain enablers under `features/pokemon/domain/entities/`, data sources under `features/pokemon/data/datasources/`, shared encoding under `features/pokemon/data/`. UI is correctly absent (Camada 2).
-- **Test directories: Complete.** Mirror structure present: `test/features/pokemon/data/datasources/pokemon_dao_test.dart`, `test/features/pokemon/data/summary_encoding_test.dart`, `test/features/pokemon/domain/entities/pokemon_filter_test.dart`.
-- **Generated-code config: Complete and correct.** `analysis_options.yaml` and `.gitignore` both add `*.drift.dart` (keeping the 1:1 ignore/analysis invariant from the project memory). This is defensive — `part`-mode drift emits `*.g.dart`, but the glob protects against a future switch to modular output. Good.
-- **Dependency manifest: Correct and well-justified.** `pubspec.yaml` pins `drift 2.31.0` / `drift_dev 2.31.0` / `drift_flutter 0.2.8` exact, with an inline comment explaining the analyzer-9 stable-codegen rationale (2.32.0 → analyzer ^10 would drag freezed/riverpod onto `-dev`). `sqlite3_flutter_libs ^0.5.24` added; `json_annotation` bumped `^4.9.0`→`^4.11.0`. These match the plan's locked pins exactly.
-- **Single clear responsibility per file:** each file does one thing (schema; TTL; enum; filter; encoding; DS contract; DAO). No grab-bag.
-
-**`AppDatabase`: Complete.** Four tables (`PokemonSummaries`, `PokemonDetails`, `EvolutionChains`, `TypeRelations`), each with `updatedAt` epoch-ms for TTL (RN-16); `nameNormalized` column resolves RN-07 SQL-natively; `weaknessMask` with `withDefault(0)` (populated PR3); `payloadJson` documented as opaque to the cache layer (entity serialization owned by PR3 mappers). `forTesting` ctor enables in-memory tests; `schemaVersion = 1` + `MigrationStrategy(onCreate: createAll)`. Web-safe: no `dart:io`/`dart:ffi` in the non-generated data layer (verified by grep); the web connection is handled by `drift_flutter`'s `driftDatabase(web: DriftWebOptions(...))`.
+**Clean dependencies:** all PR3 edges.
 
 ---
 
-## Findings (ranked)
+## Translation Boundary (CRITICAL invariants 4 & 5)
 
-### Critical
-None. The PR is architecturally sound; the one non-negotiable rule (no core→feature) is upheld.
+### DTO ↔ entity ↔ row mapping — PASS (no DTO/row leak into entities)
 
-### Important
-None. (The items below are suggestions, not merge-blockers.)
+- **`pokemon_mapper.dart` / `pokemon_detail_mapper.dart` / `evolution_mapper.dart`** take DTOs in,
+  return pure entities out. No `PokemonDto`, `*Companion`, or `*Row` type appears on any entity field
+  — confirmed by reading every entity (`pokemon.dart`, `pokemon_detail.dart`, etc.): fields are
+  primitives, `PokemonTypeId`, and sibling entities only. The DTO and Drift-row types never cross the
+  boundary into `domain/`.
+- **`cache_mapper.dart`** is the entity↔row translator and is the *only* mapper that imports
+  `package:drift` and `core/database` — correct, because companions/rows are Drift artifacts that
+  belong strictly in the data layer. Entities are encoded to `payloadJson` via `jsonEncode(toJson())`
+  and decoded via `fromJson(jsonDecode(...))`. The Drift types stop at this file.
+- **Derived columns** (`primaryTypeId`/`secondaryTypeId`/`nameNormalized`/`height`/`weaknessMask`)
+  are computed in the data layer at upsert time, never stored on the entity. The entity stays the
+  source of truth in `payloadJson`; the columns are pure search/filter indices. This is the right
+  split and keeps the cache layer entity-shape-driven, not schema-driven.
 
-### Suggestions
+### Symmetric snake round-trip (CRITICAL invariant 5) — PASS
 
-**S1 — `PokemonTypeId.index` is now a persistence contract, but the enum carries no guard comment.**
-`primaryTypeId`/`secondaryTypeId` store `PokemonTypeId.index`, and `weaknessMask` packs `1 << type.index` per the `typeWeaknessMask` encoding (`summary_encoding.dart:52`). That makes the **declaration order of `PokemonTypeId` a stored schema invariant**: reordering or inserting a value mid-enum silently corrupts every cached row and bitmask written under the old order (with `schemaVersion = 1` and no migration to rewrite them). The enum (`lib/core/pokemon/pokemon_type_id.dart`) has no comment warning that the order is load-bearing for persistence (`grep` for any "order/persist/stable/do not reorder" guard → none). This is not a bug today, but it is a latent foot-gun for a future contributor. *Recommendation:* add a one-line doc note on the enum ("Ordinal `index` is persisted in the Drift cache and packed into `weaknessMask`; appending is safe, reordering/inserting is a breaking schema change requiring a migration + `schemaVersion` bump"). Cheap insurance; no code change.
+`build.yaml` sets `json_serializable: field_rename: snake` repo-globally. The same generated code
+encodes (`toJson`) and decodes (`fromJson`) the cache `payloadJson`, so the round-trip is symmetric by
+construction — a domain entity emitting `snake_case` JSON into the cache is not a wire-format leak, it
+is internal cache serialization. The build.yaml comment documents this intent. Confirmed: no entity
+carries a hand-written `@JsonKey` that would desync encode/decode; the hyphenated `official-artwork`
+key is handled in the *DTO* layer (PR1), not in entities.
 
-**S2 — Plan/impl deltas in the connection strategy and `daos:` registration — confirm they are intentional (they appear to be sound improvements).**
-The plan's T-09 text (and Tech Spec §6.2) described a `core/database/connection/` directory with conditional `native.dart`/`web.dart`/`connection.dart` exports, and `@DriftDatabase(tables: [...], daos: [PokemonDao])`. The implementation instead:
-  (a) uses `drift_flutter`'s single `driftDatabase(name:, web: DriftWebOptions(...))` inline in `_openConnection()` — no `connection/` directory; and
-  (b) uses `@DriftDatabase(daos: [])` (PokemonDao unregistered, constructed manually).
-Both deltas are **architecturally *better* than the plan**, not regressions: (a) `drift_flutter` is the current idiom and removes hand-rolled conditional-import boilerplate while still being web-safe (no `dart:io` leaks into `lib`); (b) is exactly what keeps `core/` free of a `features/` import — registering the DAO as the plan literally wrote it (`daos: [PokemonDao]` inside `core/database/app_database.dart`) would have *created* the core→feature violation. So the implementation correctly diverged from the plan to *preserve* the dependency rule. *Recommendation:* none required for merge; note this delta in the PR description so a reviewer cross-checking against the plan isn't surprised, and so the plan can be retro-annotated (the plan already set the precedent of recording reconciliations).
+One latent coupling worth a comment (Suggestion, not a defect): `payloadJson` stores the entity's
+*current* JSON shape. A future field rename/removal on `Pokemon`/`PokemonDetail` will make old cached
+rows fail `fromJson`. The architecture already handles this gracefully — `pokemon_repository_impl.dart`
+wraps every decode in `_tryParse`/`on FormatException` and treats a corrupt/unreadable payload as a
+cache miss (online) or `CacheFailure` (offline). So schema drift degrades safely rather than crashing.
+No action required; noted so the cache-versioning expectation is explicit.
 
-**S3 — `secondaryTypeId.isIn(ids)` NULL semantics — verify intent (likely already correct).**
-The type filter uses `t.primaryTypeId.isIn(ids) | t.secondaryTypeId.isIn(ids)` (`pokemon_dao.dart:116`). In SQL, `NULL IN (...)` evaluates to `NULL` (not `false`), but because it is OR-combined with the non-nullable `primaryTypeId.isIn(ids)` inside a `WHERE`, the row is correctly included iff *either* matches — single-type mons (null secondary) are not wrongly excluded. The DAO test ("by primary or secondary type") confirms the behavior. This is a *correctness*/test concern more than architecture; raised only so the SQL NULL nuance is on record. No change needed.
+---
+
+## Persisted-contract coupling (`PokemonTypeId.index` ↔ cache) — assessed, acceptable
+
+The cache stores `PokemonTypeId.index` in `primaryTypeId`/`secondaryTypeId` and as the weakness-mask
+bit (`1 << index`, `summary_encoding.dart:53`). `pokemon_type_id.dart` carries a prominent ⚠ doc-comment
+warning that the enum order is a **persisted contract** ("Do NOT reorder or remove values… Append new
+types at the end only"). This is the correct way to manage an enum-index-as-persistence-key coupling:
+
+- The risk (silent cache corruption on reorder) is real but **documented at the definition site**,
+  which is where a future editor will see it.
+- The two distinct numbering schemes are cleanly separated: `PokemonTypeId.index` (app's own persisted
+  order) vs `pokeApiTypeIds` (the PokéAPI's `/type/{id}` numbering, `type_effectiveness.dart:8-27`).
+  Mixing these would be a bug; keeping them as two explicit maps with a doc-comment explaining the
+  difference is the right design. The repository fetches with `pokeApiTypeIds[type]!` and persists with
+  `type.index` — correct on both sides.
+
+**Suggestion:** the schema invariant is currently guarded only by prose. A cheap belt-and-suspenders
+would be a single golden/unit test asserting the full `PokemonTypeId.values` → index ordering (and/or
+that `weaknessMask` for a known type set equals a fixed literal), so an accidental reorder fails CI
+loudly instead of silently corrupting caches. The doc-comment is good; a test would make it enforced.
+
+---
+
+## Documented deviation — `getEvolutionChain` resolves chainId via species (online-only)
+
+`getEvolutionChain(id)` (`pokemon_repository_impl.dart:117-146`) fetches `/pokemon-species/{id}` to
+obtain the chain id before it can read/serve the chain cache, so the method is **online-only on a cold
+chain lookup** even though the chain row itself may be cached. The code documents this inline
+("The chain id lives on the species (not cached separately), so resolving it needs the network").
+
+**Architectural assessment: acceptable for this layer, with a noted asymmetry.**
+
+- It is honest and isolated — the deviation is local to one method and clearly commented.
+- It is consistent with the PokéAPI shape: the chain id is not on `/pokemon`, only on
+  `/pokemon-species`, so resolving it offline is genuinely impossible without extra cached state.
+- **Asymmetry worth noting (Suggestion):** `getPokemonDetail` composes evolution implicitly and caches
+  the whole detail, while `getEvolutionChain` cannot serve a cached chain offline because it cannot
+  resolve the chain id offline. A future refinement (out of PR3 scope) could persist the
+  `pokemonId → chainId` mapping (e.g. on the summary or detail row) so a warmed chain is offline-
+  serveable. Not a violation; the current behavior matches the documented contract and degrades to a
+  clean `Err(NetworkFailure)` offline.
+
+---
+
+## Package / Module Structure
+
+This is a single-package app (`pokedex`), so "package structure" maps to module/folder structure.
+
+- **`domain/` module: Complete.** `entities/` + `repositories/`, pure Dart, single responsibility
+  (the domain model + its contracts). No grab-bag.
+- **`data/` module: Complete.** `dtos/`, `datasources/`, `services/`, `mappers/`, `repositories/` —
+  each folder a single concern. `summary_encoding.dart` sits at `data/` root (shared by the PR2 DAO and
+  the PR3 cache mapper) rather than inside `mappers/`; this is the correct home because it is consumed
+  by both the datasource (PR2) and the mapper (PR3) and belongs to neither exclusively.
+- **Test directories: Present.** `test/features/pokemon/data/mappers/` (6 files, one per mapper +
+  generation_ranges) and `test/features/pokemon/data/repositories/` exist, matching the source tree.
+- **No unnecessary modules.** Every folder earns its existence; no single-file orphan packages.
+- **One-file-per-concept discipline holds:** five mappers split by concept (pokemon / detail /
+  evolution / type-effectiveness / cache) rather than one mega-mapper — appropriate given each is a
+  distinct, independently-tested translation with its own bug surface (weakness math being the
+  highest-risk).
+
+Structure is clean.
 
 ---
 
 ## Verdict
 
-**Architecture is clean — ready to merge (from an architecture standpoint).**
+**Architecture is clean — ready to merge.** The dependency rule holds across all PR3 source; DIP is
+correctly applied (impl implements the domain-owned interface); the DTO↔entity↔row translation boundary
+leaks nothing into the domain; the cache round-trip is symmetric; DI is constructor-based with no global
+state; and the persisted-enum coupling is documented at its definition site.
 
-The defining constraint of this PR — keeping the Drift schema in `core/` while the DAO lives in `features/`, with **no core→feature edge** — is implemented correctly and deliberately (unregistered DAO + manual construction). The dependency rule holds in every direction: domain entities are pure, the data layer depends only downstream (core/infra) and on domain contracts, and there are no circular edges. The local data source returns raw Drift rows with row→entity mapping correctly deferred to PR3, and the shared `summary_encoding` is placed sensibly in the data layer so PR2's query and PR3's mapper share one canonical encoding. The three findings are all non-blocking suggestions; **S1 (enum-order persistence guard)** is the most valuable cheap follow-up.
+The one item to address is the **transitive Flutter import via `core/error/failure.dart`** — it is a
+pre-existing foundation/PR1 line, not a PR3 change, but PR3 is where the "pure domain" contract starts
+depending on it, so fixing it now (swap `package:flutter/foundation` → `package:meta` for `@immutable`)
+is cheap insurance before the layer hardens. Treat it as Important, not blocking.
 
-**Critical: 0 · Important: 0 · Suggestions: 3.**
+### Summary counts
+
+- **Critical: 0**
+- **Important: 1** — `core/error/failure.dart` imports `package:flutter/foundation`, transitively
+  pulling Flutter into the nominally-pure domain layer (one-line fix: use `package:meta`).
+- **Suggestions: 3**
+  - Add a unit/golden test pinning `PokemonTypeId.values` ordering (the persisted-contract invariant
+    is currently prose-only).
+  - Document/accept the `payloadJson` cache-versioning expectation (drift handling already degrades
+    safely — make the assumption explicit).
+  - Consider persisting `pokemonId → chainId` later so `getEvolutionChain` can serve cached chains
+    offline (resolves the documented online-only asymmetry; out of PR3 scope).
