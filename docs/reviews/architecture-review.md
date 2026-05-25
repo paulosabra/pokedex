@@ -1,81 +1,168 @@
-# Architecture Review — Foundation PR1 (T-01 + T-02 + T-05)
+# Architecture Review — PR2 (T-03 · Error core)
 
-- **Branch:** `feature/foundation-part1` → `epic/foundation`
-- **Scope:** Scaffold, deps/codegen/lints, CI. Skeleton only — no data/domain/presentation code.
-- **Architecture under review:** single-package, feature-first Clean Architecture (`app/` + `core/` + `features/`). Reviewed as such; no monorepo recommendation made.
-- **Reviewed (hand-authored):** `lib/main.dart`, `lib/app/app.dart`, the `lib/` tree, `pubspec.yaml`, `.github/workflows/ci.yaml`. Cross-checked `analysis_options.yaml`, `.gitignore`, `pubspec.lock`, `README.md`, `test/app/app_boot_test.dart`. Generated platform folders (`android/`, `ios/`, `web/`, `macos/`, `.metadata`, `.idea/`) ignored per instructions.
+- **Scope:** `lib/core/error/failure.dart`, `lib/core/error/result.dart`, `test/core/error/*`
+- **Branch:** `feature/foundation-part2` → `epic/foundation`
+- **Plan:** `docs/plan/2026-05-24-chore-foundation-setup-plan.md` § "PR2 — Error core"
+- **Architecture:** single-package, feature-first Clean Architecture; `core/` is a transversal **pure leaf**.
+- **Reviewed:** 2026-05-24
+
+---
+
+## Summary
+
+PR2 adds the typed error vocabulary (`Failure` hierarchy + `Result<T>`) at `lib/core/error/`.
+The placement, dependency direction, and sealed-type design are architecturally sound and match
+the Tech Spec (§7.3 / §8.1) and the approved plan. No upward imports exist; the layer is a true
+leaf. The only non-pure-Dart coupling — `@immutable` from `flutter/foundation` — is justified and
+acceptable for a single-package Flutter app. This review found **no Critical and no Important
+issues**.
 
 ---
 
 ## Critical
 
-None. There are no layer-separation, dependency-direction, or composition-root defects in this PR. The skeleton is architecturally sound for the data/domain/UI layers to build on.
+_None._
 
 ---
 
 ## Important
 
-None. Nothing here will "bite later" at the architectural level. The two items most likely to cause downstream friction — the `PokemonTypeId` placement and the missing `core/` substructure — are both deliberate, documented decisions that are actually the *correct* architectural calls (see Minor and Suggestion). I record the consistency observations below as Minor/Suggestion rather than Important because none of them constrains a later layer or sets up a boundary violation.
+_None._
 
 ---
 
 ## Minor
 
-### M-1 — `analysis_options.yaml` exclude globs diverge from the plan (2 of 4)
-`analysis_options.yaml` excludes only:
-```yaml
-analyzer:
-  exclude:
-    - "**/*.g.dart"
-    - "**/*.freezed.dart"
-```
-The plan (`docs/plan/2026-05-24-chore-foundation-setup-plan.md:155-156`) specifies excluding generated globs **1:1 with `.gitignore`**, listing four: `**/*.g.dart`, `**/*.freezed.dart`, `**/*.mocks.dart`, `**/*.config.dart`.
+### M-1 — `Result` is not annotated `@immutable` for symmetry with `Failure`
 
-This is not an architecture defect and not blocking for PR1 (mocktail generates no files; there is no `injectable`/`config.dart` consumer). But the "1:1 with `.gitignore`" invariant the plan sets up is *already* not holding, and `.gitignore` (`.gitignore:47-49`) itself only ignores `*.g.dart` and `*.freezed.dart` — it omits `*.mocks.dart` too. Worth aligning both files now (or consciously dropping `*.mocks.dart`/`*.config.dart` since the toolchain uses `mocktail`, which is codegen-free, and no DI-config generator is planned) so a future reviewer doesn't treat the drift as a regression. `file: analysis_options.yaml`, `file: .gitignore:47-49`.
-
-### M-2 — `app/theme/` not yet present (expected — PR3)
-The plan's target tree (`...plan.md:65-75`) shows `lib/app/theme/`. It is absent now. This is correct: T-04/theme lands in PR3. `lib/app/` currently holds only `app.dart`, which sits properly at the composition root. No action — recorded only to confirm the absence is intentional, not an omission. `file: lib/app/`.
+- `lib/core/error/result.dart:4` — `Result<T>`, `Ok<T>`, and `Err<T>` are sealed/final with
+  `const` constructors and `final` fields, so they are effectively immutable. But unlike
+  `Failure` (`lib/core/error/failure.dart:9`), they carry no `@immutable` annotation.
+- This is stylistic, not a defect — the classes are already immutable in practice. Adding
+  `@immutable` to `Result` would make the contract explicit and consistent with `Failure`, and
+  the `flutter/foundation` import is already paid for in this package (see S-1). Note: `Ok<T>`
+  holds a `T value` whose runtime instance may itself be mutable, so `@immutable` would be a
+  shallow guarantee — acceptable, and the same caveat the analyzer already tolerates everywhere.
+- **Not blocking.** Leave as-is or annotate; either is defensible.
 
 ---
 
 ## Suggestion
 
-### S-1 — Composition root is clean; keep `ProviderScope` out until it has a consumer
-`lib/main.dart:4-6` (`runApp(const PokedexApp())`) and `lib/app/app.dart` (`PokedexApp` → `MaterialApp`) form a textbook composition root: `main` is the entrypoint, `app/` owns app-level wiring, and the widget is `const`. The plan defers `ProviderScope` to T-17 (`...plan.md:72`). This is the right call — adding `ProviderScope` now, with zero providers, would be premature wiring. When it lands, place it in `app/` wrapping `PokedexApp` (or just inside it), keeping `main.dart` a one-liner. No change needed now.
+### S-1 — `@immutable` via `flutter/foundation` is the correct call (assessment, not a change)
 
-### S-2 — `PokemonTypeId` → `core/` is the correct dependency-direction decision
-The plan places the shared `PokemonTypeId` enum in `core/pokemon/` rather than `app/theme/` (`...plan.md:73`, `:271-284`, `:414-416`) precisely to avoid a domain→presentation inversion when T-14's domain layer consumes it. This is the architecturally correct resolution: `core/` is a leaf that both `app/theme` (PR3) and `features/*/domain` (T-14) may depend on, so the enum flows *downward* to both. Endorsed. The PR does not introduce the enum yet, so nothing to verify in code — but the decision is sound and should be honored as written when PR3 lands.
+- `lib/core/error/failure.dart:1` imports `package:flutter/foundation.dart` for `@immutable`.
+  The task asked whether this Flutter coupling is acceptable in a leaf that is otherwise pure
+  Dart. **It is, for this project.** Rationale:
+  - This is a **single-package Flutter app**, not a published pure-Dart package. `flutter` is
+    already a direct dependency of the only package; `core/error` will never be extracted or
+    consumed by a Dart-only (server/CLI) target where dragging in Flutter would be a cost.
+  - `@immutable` is an analyzer-only annotation with **zero runtime footprint** — it does not
+    pull Flutter widgets, bindings, or platform channels into the call graph.
+  - Verified `meta` is **not** a direct dependency in `pubspec.yaml`. Reusing the already-present
+    `flutter` SDK dep to source `@immutable` avoids adding `meta` solely for one annotation,
+    which is the leaner choice and matches the plan's incremental-deps / YAGNI posture.
+- **If** this code were ever promoted to a shared pure-Dart package (it is not on the roadmap),
+  the fix is a one-line import swap to `package:meta/meta.dart`. No structural change required.
+  No action needed now.
 
-### S-3 — `features/` and `core/` as `.gitkeep` placeholders is consistent with YAGNI scaffolding
-`lib/core/.gitkeep` and `lib/features/.gitkeep` are empty placeholders; `core/network`, `core/database`, `core/utils`, `core/widgets`, and per-feature `domain/`+`data/`+`presentation/` trees are deferred to the slices that need them (`...plan.md:77-80`). This matches the documented YAGNI-on-scaffolding decision and is the right level of restraint for a foundation PR. No premature directories were created. Confirmed clean. `file: lib/core/.gitkeep`, `file: lib/features/.gitkeep`.
+### S-2 — Consider whether `core/error/` will need an `exceptions` slot before T-06
 
-### S-4 — Dependency set respects layer direction; no data-layer deps leaked upward
-`pubspec.yaml:10-31` declares only state/codegen/lint/test deps (`flutter_riverpod`, `riverpod_annotation`/`_generator`, `freezed`/`_annotation`, `json_*`, `very_good_analysis`, `mocktail`, `build_runner`). No `dio`, `drift`, `go_router`, or `connectivity_plus` — those land with their consuming layers (`...plan.md:120-126`). At the package level this keeps the data layer's transitive deps out of the foundation, so nothing in `app/`/`core/` can accidentally take a data-layer dependency before that layer exists. The exact pins on `freezed: 3.2.5` and `riverpod_generator: 4.0.3` (`pubspec.yaml:23-30`) correctly lock the analyzer-9/stable-codegen line. Good.
-
-### S-5 — CI codegen-before-analyze ordering protects the layered build going forward
-`.github/workflows/ci.yaml:31-46` orders `pub get` → `build_runner build` → format → `flutter analyze --fatal-infos --fatal-warnings` → `flutter test --coverage`. Generated code is git-ignored (`.gitignore:47-49`), so regenerating before analyze is structurally required once T-08 introduces real codegen. Ordering this now — while it's a no-op — means the gate is already correct when DTOs/entities/DI arrive. `pubspec.lock` is committed (verified: not git-ignored), pinning resolution against the floating `stable` channel. Architecturally this is the right foundation for reproducible cross-layer builds. Note the boot test (`test/app/app_boot_test.dart`) asserts real composition (`find.byType(MaterialApp)`), not a tautology — a genuine composition guard.
+- Tech Spec §3 describes `core/error/` as holding "Failure, Result, **exceptions**." PR2 ships
+  `Failure` + `Result` only, which is correct for this slice (no Dio yet). When T-06 maps Dio
+  exceptions → `Failure`, decide deliberately whether intermediate exception types live here or
+  whether the error mapper in `core/network/` consumes Dio's own exceptions directly and emits
+  `Failure`. The current design supports either — flagging only so the §3 "exceptions" note
+  isn't silently dropped. No action this PR.
 
 ---
 
-## Dependency Direction (summary)
+## Detailed validation against the task questions
 
-- **Layer-separation violations:** 0. No file imports across a forbidden boundary. `lib/main.dart` imports only `package:flutter/material.dart` + `package:pokedex/app/app.dart`; `lib/app/app.dart` imports only `package:flutter/material.dart`. Both clean.
-- **Circular dependencies:** none possible — only one source file pair exists, flowing `main → app`.
-- **Reverse dependencies:** none. `core/` and `features/` are empty; no upward import can exist yet.
-- **Package-level direction:** clean — no data-layer package deps present to point the wrong way (S-4).
+### 1. Is `core/error/` correctly a leaf (no upward imports)?
 
-## Package / Structure Checklist
+**Yes.** Verified by scanning all imports in `lib/core`:
 
-- [x] Dependency manifest present, correct name (`pokedex`), `publish_to: none` (app, not package) — `pubspec.yaml:1-3`.
-- [x] Lint config follows project standard (`very_good_analysis`) — `analysis_options.yaml:1`.
-- [x] Test directory exists with a real composition test — `test/app/app_boot_test.dart`.
-- [x] Single clear responsibility per directory; `app/` = wiring, `core/` = shared leaves, `features/` = feature trees.
-- [x] UI/business-logic separation preserved by the feature-first layout (not yet exercised — no features).
-- [x] No unnecessary cross-layer dependencies.
-- [~] Generated-globs exclusion not yet 1:1 across `analysis_options.yaml` / `.gitignore` (M-1).
+- `lib/core/error/failure.dart` imports only `package:flutter/foundation.dart`.
+- `lib/core/error/result.dart` imports only `package:pokedex/core/error/failure.dart` (intra-leaf).
+- No imports of `features/`, `app/`, or any `data` / `domain` / `presentation` path exist
+  anywhere under `lib/core` (`grep` for `features/|app/|presentation|data/|domain/` → none).
+- Inbound check: nothing outside `lib/core/error/` imports the error core yet (expected — its
+  consumers, data/domain, arrive in later layers). No premature coupling.
+
+`core/error` is a genuine transversal pure leaf, exactly as the plan's Technical Considerations
+("`core/error` is leaf") and Tech Spec §3 ("código realmente transversal vive em `core/`") require.
+
+### 2. Is `Result` depending on `Failure` (and not vice-versa) sound?
+
+**Yes — the dependency direction is correct and one-way.**
+
+- `result.dart` → `failure.dart` (`Err.failure` is typed `Failure`). `failure.dart` has **no**
+  reference to `Result`. No cycle.
+- This is the right direction: `Result<T>` is the generic success/error envelope, and the error
+  arm must name a concrete error vocabulary. `Failure` is the more primitive concept (it has
+  meaning independent of `Result`), so it belongs "below." A reverse dependency (`Failure`
+  knowing about `Result`) would be an abstraction inversion. Clean.
+
+### 3. Will this vocabulary serve the later data/domain layers cleanly?
+
+**Yes.** The `Failure` subtypes are a 1:1 transcription of Tech Spec §7.3's Dio→Failure→TE map:
+`NetworkFailure` (TE-01/02), `TimeoutFailure` (TE-06), `NotFoundFailure` (TE-03),
+`ServerFailure` (TE-07), `RateLimitFailure` (TE-08), `ParsingFailure` (TE-09), `CacheFailure`
+(TE-01). The T-06 mapper (`DioExceptionType.connectionError → NetworkFailure`, etc.) will switch
+over Dio exception types and construct these directly — the default-message constructors
+(`const NetworkFailure([super.message = 'offline'])`) make that mapping terse. Use cases
+returning `Result<T>` (Tech Spec §4.1, `call(...) → Result<T>`) compose with `Ok`/`Err` without
+any added abstraction. The vocabulary is complete for the planned data/domain needs and the
+many-to-one TE mapping is documented in the doc comment (`failure.dart:5-6`).
+
+### 4. Is the sealed-type design appropriate for exhaustive handling?
+
+**Yes — this is the canonical reason to use sealed types here.**
+
+- `sealed class Failure` + `final` subtypes (`failure.dart:10`, `:30-69`) and `sealed class
+  Result<T>` + `final Ok`/`Err` (`result.dart:4`, `:10`, `:19`) give the analyzer closed-world
+  knowledge, so `switch` over a `Result`/`Failure` is exhaustiveness-checked at compile time.
+- The test at `test/core/error/result_test.dart:22-30` exercises exactly this — a `switch`
+  expression with no `default`, which only compiles because the hierarchy is sealed. Adding a new
+  `Failure` later will force every exhaustive `switch` to be updated (the desired safety net for
+  the presentation layer's failure→message mapping).
+- `final` (not `base`/`sealed`) on the leaves is appropriate: subtypes are concrete and should
+  not be extended further. Good.
+
+### 5. Equality contract
+
+`Failure` hand-rolls `==`/`hashCode` over `[runtimeType, message]` (`failure.dart:17-25`),
+matching the plan's pinned contract. Using `runtimeType` (not `is`) correctly makes
+`NetworkFailure('x') != CacheFailure('x')` even though both map to TE-01 — verified by
+`failure_test.dart:33-36`. Inequality on same-type/different-message is covered
+(`failure_test.dart:29-31`). This is the architecturally important property: `Failure` values are
+comparable, so they flow safely through `Result` into Riverpod `AsyncValue.error` /
+UI-state equality without spurious rebuilds. `Result` itself has no value equality — acceptable,
+since equality is delegated to its payload (`T` or `Failure`) at the use sites that need it.
+
+---
+
+## Layer Separation
+
+- Violations found: **0**
+- Clean files: `lib/core/error/failure.dart`, `lib/core/error/result.dart` (all checked files clean)
+
+## Dependency Direction
+
+- Direction violations: **0** · Circular dependencies: **0**
+- Clean: `result.dart → failure.dart` (one-way, intra-leaf); `core/error` depends on nothing in
+  `features/`, `app/`, or any layer above it.
+
+## Package / Module Structure
+
+- Single package; `core/error/` is a focused module with one clear responsibility (typed error
+  vocabulary). Test mirror exists at `test/core/error/`. Files are well-sized and YAGNI-correct
+  for the slice (no exceptions/Dio code pulled in early). No unnecessary dependencies.
 
 ---
 
 ## Verdict
 
-**Architecture is clean — ready to merge.** Zero critical/important issues; one minor glob-alignment nit (M-1) worth tidying but non-blocking, and four suggestions that confirm the deliberate decisions are the architecturally correct ones.
+**Architecture is clean — ready to merge.** No Critical or Important issues; 1 Minor (optional
+`@immutable` on `Result`) and 2 Suggestions, none blocking.
