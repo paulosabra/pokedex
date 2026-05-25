@@ -8,6 +8,7 @@ import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/error/result.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
 import 'package:pokedex/features/pokemon/data/datasources/pokemon_dao.dart';
+import 'package:pokedex/features/pokemon/data/datasources/pokemon_local_data_source.dart';
 import 'package:pokedex/features/pokemon/data/datasources/pokemon_remote_data_source.dart';
 import 'package:pokedex/features/pokemon/data/dtos/evolution_chain_dto.dart';
 import 'package:pokedex/features/pokemon/data/dtos/location_area_encounter_dto.dart';
@@ -32,6 +33,72 @@ import '../../../../helpers/fixtures.dart';
 class _MockRemote extends Mock implements PokemonRemoteDataSource {}
 
 class _MockConnectivity extends Mock implements Connectivity {}
+
+/// Delegates to a real [PokemonLocalDataSource] but fails every detail write,
+/// to exercise the repository's best-effort caching of a freshly composed
+/// detail.
+class _FailingDetailWriteLocal implements PokemonLocalDataSource {
+  _FailingDetailWriteLocal(this._inner);
+
+  final PokemonLocalDataSource _inner;
+
+  @override
+  Future<void> upsertDetail(PokemonDetailsCompanion detail) async {
+    throw StateError('cache write failed');
+  }
+
+  @override
+  Future<void> upsertSummaries(List<PokemonSummariesCompanion> summaries) =>
+      _inner.upsertSummaries(summaries);
+
+  @override
+  Future<void> upsertEvolutionChain(EvolutionChainsCompanion chain) =>
+      _inner.upsertEvolutionChain(chain);
+
+  @override
+  Future<void> upsertTypeRelation(TypeRelationsCompanion relation) =>
+      _inner.upsertTypeRelation(relation);
+
+  @override
+  Future<PokemonSummaryRow?> readSummary(int id) => _inner.readSummary(id);
+
+  @override
+  Future<PokemonDetailRow?> readDetail(int id) => _inner.readDetail(id);
+
+  @override
+  Future<EvolutionChainRow?> readEvolutionChain(int chainId) =>
+      _inner.readEvolutionChain(chainId);
+
+  @override
+  Future<TypeRelationRow?> readTypeRelation(int typeId) =>
+      _inner.readTypeRelation(typeId);
+
+  @override
+  Future<List<PokemonSummaryRow>> querySummaries({
+    required SortCriteria sort,
+    String? query,
+    PokemonFilter? filter,
+    int? generationId,
+  }) => _inner.querySummaries(
+    sort: sort,
+    query: query,
+    filter: filter,
+    generationId: generationId,
+  );
+
+  @override
+  Stream<List<PokemonSummaryRow>> watchSummaries({
+    required SortCriteria sort,
+    String? query,
+    PokemonFilter? filter,
+    int? generationId,
+  }) => _inner.watchSummaries(
+    sort: sort,
+    query: query,
+    filter: filter,
+    generationId: generationId,
+  );
+}
 
 void main() {
   late AppDatabase db;
@@ -230,6 +297,37 @@ void main() {
         expect((result as Ok<PokemonDetail>).value.description, 'STALE');
       },
     );
+
+    test(
+      'stale cache offline serves the stale value without a network call',
+      () async {
+        goOffline();
+        when(
+          () => remote.fetchPokemon(any()),
+        ).thenThrow(const NetworkFailure());
+        final stale = composedDetail().copyWith(description: 'STALE');
+        await seedDetail(stale, updatedAt: daysAgo(8));
+
+        final result = await repo.getPokemonDetail(1);
+
+        expect((result as Ok<PokemonDetail>).value.description, 'STALE');
+        verifyNever(() => remote.fetchPokemon(any()));
+      },
+    );
+
+    test('a failed cache write still returns the composed detail', () async {
+      stubComposeSuccess();
+      final repoWithFailingWrites = PokemonRepositoryImpl(
+        remote,
+        _FailingDetailWriteLocal(dao),
+        connectivity,
+        () => clock,
+      );
+
+      final result = await repoWithFailingWrites.getPokemonDetail(1);
+
+      expect(result, isA<Ok<PokemonDetail>>());
+    });
 
     test('corrupt cache online is treated as a miss and recomposed', () async {
       stubComposeSuccess();
@@ -433,6 +531,30 @@ void main() {
           .first;
       expect(first.map((p) => p.id), [1, 4]);
     });
+
+    test(
+      'watchCachedSummaries drops a corrupt row instead of erroring',
+      () async {
+        await dao.upsertSummaries([
+          PokemonSummariesCompanion.insert(
+            id: const Value(2),
+            name: 'corrupt',
+            nameNormalized: 'corrupt',
+            primaryTypeId: 0,
+            generationId: 1,
+            height: 1,
+            payloadJson: '{"corrupt":true}',
+            updatedAt: nowMs(),
+          ),
+        ]);
+
+        final first = await repo
+            .watchCachedSummaries(sort: SortCriteria.numberAsc)
+            .first;
+
+        expect(first.map((p) => p.id), [1, 4]);
+      },
+    );
   });
 
   test('search surfaces a corrupt summary row as CacheFailure', () async {

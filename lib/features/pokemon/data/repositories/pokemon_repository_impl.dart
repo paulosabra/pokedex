@@ -23,8 +23,10 @@ import 'package:pokedex/features/pokemon/domain/entities/pokemon_page.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
 import 'package:pokedex/features/pokemon/domain/repositories/pokemon_repository.dart';
 
-/// Cache-first implementation of [PokemonRepository] (RN-02). Serves cache,
-/// revalidates from the network, and degrades to stale/offline gracefully.
+/// Implementation of [PokemonRepository] (RN-02). Detail reads are cache-first
+/// with background revalidation and degrade to stale/offline gracefully; list
+/// reads are network-backed and seed the cache that powers offline
+/// search/filter/watch.
 class PokemonRepositoryImpl implements PokemonRepository {
   /// Creates a [PokemonRepositoryImpl]. The clock is injectable for TTL tests.
   PokemonRepositoryImpl(
@@ -100,7 +102,10 @@ class PokemonRepositoryImpl implements PokemonRepository {
           if (online) unawaited(_revalidateDetail(id));
           return Ok(cached);
         }
-        // Stale: revalidate now, but fall back to the stale copy on failure.
+        // Stale: offline, serve the stale copy immediately rather than blocking
+        // on a network call that can only time out. Online, revalidate now and
+        // fall back to the stale copy on failure.
+        if (!online) return Ok(cached);
         try {
           return Ok(await _composeDetail(id));
         } on Failure {
@@ -168,7 +173,14 @@ class PokemonRepositoryImpl implements PokemonRepository {
     PokemonFilter? filter,
   }) => _local
       .watchSummaries(sort: sort, filter: filter)
-      .map((rows) => rows.map(pokemonFromRow).toList());
+      .map(
+        // Drop a corrupt row rather than erroring the whole stream; a stream of
+        // cache state should survive one bad payload.
+        (rows) => rows
+            .map((row) => _tryParse(() => pokemonFromRow(row)))
+            .whereType<Pokemon>()
+            .toList(),
+      );
 
   Future<Result<List<Pokemon>>> _readSummaries(
     Future<List<PokemonSummaryRow>> rowsFuture,
@@ -220,7 +232,13 @@ class PokemonRepositoryImpl implements PokemonRepository {
     );
 
     if (complete) {
-      await _local.upsertDetail(detailToCompanion(detail, nowMs: nowMs));
+      // Best-effort: a cache-write failure must not discard a detail the caller
+      // already paid the network for. Persistence here is incidental.
+      try {
+        await _local.upsertDetail(detailToCompanion(detail, nowMs: nowMs));
+      } on Object {
+        // Swallow: the composed detail is returned regardless.
+      }
     }
     return detail;
   }
