@@ -27,7 +27,7 @@ A ordem pedida (Dados → Domínio → UI) é mantida. A única dependência que
 
 ```mermaid
 flowchart LR
-    F["Fase 0<br/>Fundação & Setup"] --> D["Camada 1<br/>Infraestrutura & Dados"]
+    F["Fase Inicial<br/>Fundação & Setup"] --> D["Camada 1<br/>Infraestrutura & Dados"]
     D --> DOM["Camada 2<br/>Domínio"]
     DOM --> UI["Camada 3<br/>Apresentação / UI"]
     UI --> REL["Fase Final<br/>Qualidade & Release"]
@@ -101,7 +101,7 @@ Uma tarefa fecha quando: código + testes + documentação atualizados; `flutter
 
 ---
 
-## Fase 0 — Fundação & Setup
+## Fase Inicial — Fundação & Setup
 
 ### T-01 · Inicializar projeto Flutter multiplataforma e estrutura feature-first
 
@@ -423,14 +423,14 @@ Uma tarefa fecha quando: código + testes + documentação atualizados; `flutter
 
 | Sprint                         | Foco                                                  | Tarefas                            |
 | ------------------------------ | ----------------------------------------------------- | ---------------------------------- |
-| **Fase 0 — Fundação**          | Base do projeto                                       | T-01 … T-05                        |
+| **Fase Inicial — Fundação**    | Base do projeto                                       | T-01 … T-05                        |
 | **Sprint 1 — Núcleo**          | Dados + Domínio + Design System + Lista/Busca/Detalhe | T-06 … T-20, T-24 … T-26           |
 | **Sprint 2 — Descoberta**      | Filtros, Ordenação, Gerações, Erros                   | T-21, T-22, T-23, T-27, T-29, T-30 |
 | **Sprint 3 — Multiplataforma** | Responsivo + Deploy Web + Docs                        | T-28, T-31, T-32                   |
 
 ```mermaid
 flowchart LR
-    F0["Fase 0<br/>T-01..T-05"] --> S1["Sprint 1<br/>Núcleo"]
+    F0["Fase Inicial<br/>T-01..T-05"] --> S1["Sprint 1<br/>Núcleo"]
     S1 --> S2["Sprint 2<br/>Descoberta"]
     S2 --> S3["Sprint 3<br/>Multiplataforma"]
 ```

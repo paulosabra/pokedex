@@ -1,0 +1,45 @@
+name: pokedex
+description: "Offline-first, multiplatform Pokédex — browse, search, and explore Pokémon from the PokéAPI."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^3.0.0
+  freezed_annotation: ^3.0.0
+  json_annotation: ^4.0.0
+  riverpod_annotation: ^4.0.0
+
+dev_dependencies:
+  build_runner: ^2.4.0
+  flutter_test:
+    sdk: flutter
+  # freezed and riverpod_generator are pinned to the analyzer-9 stable codegen line.
+  # A caret (^) would re-admit the 3.2.6-dev / 4.0.4-dev prereleases (analyzer 12) on a
+  # re-resolve; exact pins keep codegen on stable and surface any future analyzer fork as
+  # a loud version-solve error instead of a silent slide to -dev.
+  freezed: 3.2.5
+  json_serializable: ^6.0.0
+  mocktail: ^1.0.0
+  riverpod_generator: 4.0.3
+  very_good_analysis: ^10.0.0
+
+flutter:
+  uses-material-design: true
+
+  fonts:
+    - family: SF Pro Display
+      fonts:
+        - asset: assets/fonts/SF-Pro-Display-Regular.otf
+          weight: 400
+        - asset: assets/fonts/SF-Pro-Display-Medium.otf
+          weight: 500
+        - asset: assets/fonts/SF-Pro-Display-Semibold.otf
+          weight: 600
+        - asset: assets/fonts/SF-Pro-Display-Bold.otf
+          weight: 700
