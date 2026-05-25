@@ -1,168 +1,85 @@
-# Architecture Review — PR2 (T-03 · Error core)
+# Architecture Review — PR3 (T-04: Theme + Tokens + `PokemonTypeTheme`)
 
-- **Scope:** `lib/core/error/failure.dart`, `lib/core/error/result.dart`, `test/core/error/*`
-- **Branch:** `feature/foundation-part2` → `epic/foundation`
-- **Plan:** `docs/plan/2026-05-24-chore-foundation-setup-plan.md` § "PR2 — Error core"
-- **Architecture:** single-package, feature-first Clean Architecture; `core/` is a transversal **pure leaf**.
-- **Reviewed:** 2026-05-24
+- **Branch:** `feature/foundation-part3` → `epic/foundation`
+- **Scope reviewed:** `lib/core/pokemon/pokemon_type_id.dart`, `lib/app/theme/{app_colors,app_typography,app_theme,pokemon_type_theme}.dart`, `lib/app/app.dart`, and the accompanying tests.
+- **Standards:** single-package feature-first Clean Architecture; `core/` is a transversal leaf; `app/` is app-level wiring/theme; presentation must never be a dependency of domain. Sources of truth: Tech Spec §2 (dependency rule), §3 (layers), §8.2 (entities), §10 (tokens); Plan "PR3 — Theme".
 
 ---
 
-## Summary
+## Dependency Direction & Layer Separation
 
-PR2 adds the typed error vocabulary (`Failure` hierarchy + `Result<T>`) at `lib/core/error/`.
-The placement, dependency direction, and sealed-type design are architecturally sound and match
-the Tech Spec (§7.3 / §8.1) and the approved plan. No upward imports exist; the layer is a true
-leaf. The only non-pure-Dart coupling — `@immutable` from `flutter/foundation` — is justified and
-acceptable for a single-package Flutter app. This review found **no Critical and no Important
-issues**.
+The full intra-package import graph for the changed files (verified with `grep -rn "^import 'package:pokedex"`):
 
----
+```
+main.dart            → app/app.dart
+app/app.dart         → app/theme/app_theme.dart
+app/theme/app_theme  → app/theme/{app_colors, app_typography}
+app/theme/app_typography → app/theme/app_colors
+app/theme/pokemon_type_theme → core/pokemon/pokemon_type_id   ← the only cross-area edge
+core/pokemon/pokemon_type_id → (nothing)
+```
 
-## Critical
+- **`core/` is a clean leaf.** `grep -rn "import 'package:pokedex/app\|import 'package:pokedex/features" lib/core/` returns nothing. `pokemon_type_id.dart` imports nothing at all (not even Flutter) — it is pure Dart, which is exactly what a `core/` leaf consumable by both `app/theme` and a future `features/*/domain` must be.
+- **The one cross-area edge points downward** (`app/theme` → `core/pokemon`), the allowed direction. `core/` never imports `app/` or `features/`, so no cycle is possible. Consistent with Tech Spec §2 ("as setas de dependência apontam sempre para o domínio") and §3's "código realmente transversal … vive em `core/`."
+- **No circular dependencies**, no reverse edges, no duplication of shared code.
 
-_None._
-
----
-
-## Important
-
-_None._
+**Verdict for this section: clean. Zero layer-separation violations.**
 
 ---
 
-## Minor
+## Findings
 
-### M-1 — `Result` is not annotated `@immutable` for symmetry with `Failure`
+### Critical
+None.
 
-- `lib/core/error/result.dart:4` — `Result<T>`, `Ok<T>`, and `Err<T>` are sealed/final with
-  `const` constructors and `final` fields, so they are effectively immutable. But unlike
-  `Failure` (`lib/core/error/failure.dart:9`), they carry no `@immutable` annotation.
-- This is stylistic, not a defect — the classes are already immutable in practice. Adding
-  `@immutable` to `Result` would make the contract explicit and consistent with `Failure`, and
-  the `flutter/foundation` import is already paid for in this package (see S-1). Note: `Ok<T>`
-  holds a `T value` whose runtime instance may itself be mutable, so `@immutable` would be a
-  shallow guarantee — acceptable, and the same caveat the analyzer already tolerates everywhere.
-- **Not blocking.** Leave as-is or annotate; either is defensible.
+### Important
+None.
 
----
+### Minor
 
-## Suggestion
+1. **`core/pokemon/` is the right call, but name the boundary it implies (`core/pokemon/` ≠ domain entities).**
+   `lib/core/pokemon/pokemon_type_id.dart` is sound. The enum is a stable, dependency-free value type with no Flutter import, so it is genuinely transversal — the textbook reason to put something in `core/`. Placing it here instead of `app/theme/` correctly avoids the future `domain → presentation` inversion that would occur if T-14's `Pokemon` entity (`docs/project/02-tech-spec.md:430`) had to import from `app/theme/`. The placement is well-reasoned and the doc comment in the file (`lib/core/pokemon/pokemon_type_id.dart:3-4`) captures the rationale.
+   The risk to flag now: `core/pokemon/` must stay reserved for **transversal, dependency-free** pokemon primitives (ids, enums, small value objects). When the richer `Pokemon`/`PokemonDetail` *entity* (Freezed, business semantics, §8.2) arrives in T-14, it belongs in `features/pokemon_list/domain/`, **not** alongside this enum in `core/pokemon/`. Keeping an entity in `core/` would dissolve the feature-first boundary and let every feature reach domain models transversally. Recommendation: in T-14 the enum can stay in `core/pokemon/` (entities import *down* into it — clean) or migrate into the domain barrel; do **not** let `core/pokemon/` accrete domain entities. A guard-rail for the future PR, not a defect in PR3. (Tech Spec §3, §8.2.)
 
-### S-1 — `@immutable` via `flutter/foundation` is the correct call (assessment, not a change)
+2. **`PokemonTypeStyle` as a `typedef` record (`lib/app/theme/pokemon_type_theme.dart:9`) — the record→class migration for the icon slot is set up correctly, but the record offers no construction control.**
+   The plan's migration path (Plan L294–298) is to promote the record to a class in T-18 carrying the icon, "so call sites keep using `.color` / `.backgroundColor`." Since all access is via named fields (`.color`, `.backgroundColor`) and the only construction site is inside `styleOf` (`pokemon_type_theme.dart:50-56`), the migration to a `final class` will be source-compatible at call sites — the design is right. Minor caveat: a record typedef has no private constructor, so any code can synthesize a `(color: …, backgroundColor: …)` literal and pass it as a `PokemonTypeStyle`, bypassing `styleOf`. Today the only caller is the theme's own test, so exposure is nil. When the type gains an icon and validation in T-18, prefer a `final class` with a private/factory constructor so `styleOf` stays the single source. No change required now. (RN-04, Tech Spec §10.3, Plan L294–298.)
 
-- `lib/core/error/failure.dart:1` imports `package:flutter/foundation.dart` for `@immutable`.
-  The task asked whether this Flutter coupling is acceptable in a leaf that is otherwise pure
-  Dart. **It is, for this project.** Rationale:
-  - This is a **single-package Flutter app**, not a published pure-Dart package. `flutter` is
-    already a direct dependency of the only package; `core/error` will never be extracted or
-    consumed by a Dart-only (server/CLI) target where dragging in Flutter would be a cost.
-  - `@immutable` is an analyzer-only annotation with **zero runtime footprint** — it does not
-    pull Flutter widgets, bindings, or platform channels into the call graph.
-  - Verified `meta` is **not** a direct dependency in `pubspec.yaml`. Reusing the already-present
-    `flutter` SDK dep to source `@immutable` avoids adding `meta` solely for one annotation,
-    which is the leaner choice and matches the plan's incremental-deps / YAGNI posture.
-- **If** this code were ever promoted to a shared pure-Dart package (it is not on the roadmap),
-  the fix is a one-line import swap to `package:meta/meta.dart`. No structural change required.
-  No action needed now.
+3. **`AppTheme.light` maps §10.2 styles to Material text roles, but widgets are also told to reference `AppTypography` directly — pick one canonical path before screen work.**
+   `lib/app/theme/app_theme.dart:17-24` wires six §10.2 styles onto Material `TextTheme` roles, while the doc comment (`app_theme.dart:11-12`) says "widgets may also reference `AppTypography` styles directly." Both are defensible, but two access paths to the same tokens invite drift once T-18 builds real screens (one screen reads `Theme.of(context).textTheme.titleMedium`, another reads `AppTypography.filterTitle`). A presentation-convention question, not a layering violation. Recommendation: choose one canonical access path for T-18 screen code and record it in the UI/theme convention. (Tech Spec §10.2.)
 
-### S-2 — Consider whether `core/error/` will need an `exceptions` slot before T-06
+### Suggestion
 
-- Tech Spec §3 describes `core/error/` as holding "Failure, Result, **exceptions**." PR2 ships
-  `Failure` + `Result` only, which is correct for this slice (no Dio yet). When T-06 maps Dio
-  exceptions → `Failure`, decide deliberately whether intermediate exception types live here or
-  whether the error mapper in `core/network/` consumes Dio's own exceptions directly and emits
-  `Failure`. The current design supports either — flagging only so the §3 "exceptions" note
-  isn't silently dropped. No action this PR.
+4. **The §10.3 "altura" (height-filter) palette and per-type *icon* are correctly out of scope for PR3 — keep them out of `core/`.**
+   Tech Spec §10.3 bundles a height-category palette (Short/Medium/Tall) alongside the type palette. PR3 rightly implements only the type colors (RN-04) and derives the 16 unspecified backgrounds via `Color.lerp(color, white, 0.5)` with an honest comment (`lib/app/theme/pokemon_type_theme.dart:46-49`). When the height palette and the per-type icon arrive (filters feature / T-18), they are presentation concerns and belong in `app/theme/` (icons) or the filters feature, **not** `core/pokemon/`. PR3 sets this up well; this is a marker so the leaf does not become a dumping ground.
+
+5. **Consider a thin `app/theme/theme.dart` barrel before T-18.**
+   Screen code in T-18 will import several theme files. A single barrel (`export 'app_colors.dart'; export 'app_typography.dart'; …`) keeps presentation imports stable and one-directional and avoids each widget reaching into individual theme files. Purely ergonomic; no architectural impact.
 
 ---
 
-## Detailed validation against the task questions
+## Package / Structure Checks
 
-### 1. Is `core/error/` correctly a leaf (no upward imports)?
-
-**Yes.** Verified by scanning all imports in `lib/core`:
-
-- `lib/core/error/failure.dart` imports only `package:flutter/foundation.dart`.
-- `lib/core/error/result.dart` imports only `package:pokedex/core/error/failure.dart` (intra-leaf).
-- No imports of `features/`, `app/`, or any `data` / `domain` / `presentation` path exist
-  anywhere under `lib/core` (`grep` for `features/|app/|presentation|data/|domain/` → none).
-- Inbound check: nothing outside `lib/core/error/` imports the error core yet (expected — its
-  consumers, data/domain, arrive in later layers). No premature coupling.
-
-`core/error` is a genuine transversal pure leaf, exactly as the plan's Technical Considerations
-("`core/error` is leaf") and Tech Spec §3 ("código realmente transversal vive em `core/`") require.
-
-### 2. Is `Result` depending on `Failure` (and not vice-versa) sound?
-
-**Yes — the dependency direction is correct and one-way.**
-
-- `result.dart` → `failure.dart` (`Err.failure` is typed `Failure`). `failure.dart` has **no**
-  reference to `Result`. No cycle.
-- This is the right direction: `Result<T>` is the generic success/error envelope, and the error
-  arm must name a concrete error vocabulary. `Failure` is the more primitive concept (it has
-  meaning independent of `Result`), so it belongs "below." A reverse dependency (`Failure`
-  knowing about `Result`) would be an abstraction inversion. Clean.
-
-### 3. Will this vocabulary serve the later data/domain layers cleanly?
-
-**Yes.** The `Failure` subtypes are a 1:1 transcription of Tech Spec §7.3's Dio→Failure→TE map:
-`NetworkFailure` (TE-01/02), `TimeoutFailure` (TE-06), `NotFoundFailure` (TE-03),
-`ServerFailure` (TE-07), `RateLimitFailure` (TE-08), `ParsingFailure` (TE-09), `CacheFailure`
-(TE-01). The T-06 mapper (`DioExceptionType.connectionError → NetworkFailure`, etc.) will switch
-over Dio exception types and construct these directly — the default-message constructors
-(`const NetworkFailure([super.message = 'offline'])`) make that mapping terse. Use cases
-returning `Result<T>` (Tech Spec §4.1, `call(...) → Result<T>`) compose with `Ok`/`Err` without
-any added abstraction. The vocabulary is complete for the planned data/domain needs and the
-many-to-one TE mapping is documented in the doc comment (`failure.dart:5-6`).
-
-### 4. Is the sealed-type design appropriate for exhaustive handling?
-
-**Yes — this is the canonical reason to use sealed types here.**
-
-- `sealed class Failure` + `final` subtypes (`failure.dart:10`, `:30-69`) and `sealed class
-  Result<T>` + `final Ok`/`Err` (`result.dart:4`, `:10`, `:19`) give the analyzer closed-world
-  knowledge, so `switch` over a `Result`/`Failure` is exhaustiveness-checked at compile time.
-- The test at `test/core/error/result_test.dart:22-30` exercises exactly this — a `switch`
-  expression with no `default`, which only compiles because the hierarchy is sealed. Adding a new
-  `Failure` later will force every exhaustive `switch` to be updated (the desired safety net for
-  the presentation layer's failure→message mapping).
-- `final` (not `base`/`sealed`) on the leaves is appropriate: subtypes are concrete and should
-  not be extended further. Good.
-
-### 5. Equality contract
-
-`Failure` hand-rolls `==`/`hashCode` over `[runtimeType, message]` (`failure.dart:17-25`),
-matching the plan's pinned contract. Using `runtimeType` (not `is`) correctly makes
-`NetworkFailure('x') != CacheFailure('x')` even though both map to TE-01 — verified by
-`failure_test.dart:33-36`. Inequality on same-type/different-message is covered
-(`failure_test.dart:29-31`). This is the architecturally important property: `Failure` values are
-comparable, so they flow safely through `Result` into Riverpod `AsyncValue.error` /
-UI-state equality without spurious rebuilds. `Result` itself has no value equality — acceptable,
-since equality is delegated to its payload (`T` or `Failure`) at the use sites that need it.
+- **Single responsibility per file:** `app_colors` (color tokens), `app_typography` (text styles), `app_theme` (ThemeData assembly), `pokemon_type_theme` (per-type resolution) — clean separation, no grab-bag. PASS.
+- **Composition root (`lib/app/app.dart`):** correct. `PokedexApp` is a `StatelessWidget` building `MaterialApp(theme: AppTheme.light, home: const Scaffold())`; `main.dart` only calls `runApp`. Theme is injected at the root (global, satisfying T-04 acceptance). `ProviderScope` is intentionally deferred to T-17 per the plan — no premature wiring. PASS.
+- **Leaf/independence:** `core/pokemon` and `core/error` are independent leaves; `app/theme` depends only down into `core/`. PASS.
+- **Tests beside source** under `test/app/theme/` and `test/core/`. The color-by-type widget test (`test/app/theme/pokemon_type_theme_test.dart`) imports only `app/theme` + `core/pokemon`, mirroring the production dependency direction (no test-only back-edges). PASS.
+- **Tokens centralized in `app/theme/` per §10.** PASS. `SF Pro Display` fonts are declared in `pubspec.yaml` and present under `assets/fonts/`, so the typography references resolve.
+- **Lints:** package inherits `very_good_analysis`; theme holders consistently use `abstract final class … _();` (non-instantiable static holders). PASS.
 
 ---
 
-## Layer Separation
+## Deviation Assessment (the key decision)
 
-- Violations found: **0**
-- Clean files: `lib/core/error/failure.dart`, `lib/core/error/result.dart` (all checked files clean)
+The deliberate deviation — `PokemonTypeId` in `core/pokemon/` rather than under domain per §8.2 — is **architecturally sound and the correct choice for the foundation phase**:
 
-## Dependency Direction
+- It honors the non-negotiable dependency rule. The alternative (enum in `app/theme/`) would force T-14's domain entity `Pokemon { List<PokemonTypeId> types }` (`docs/project/02-tech-spec.md:430`) to import from presentation — a real inversion.
+- `core/` is the defined home for transversal, framework-agnostic code, and this enum qualifies (zero imports, pure Dart). Both `app/theme` (now) and `features/*/domain` (T-14) may depend on it from above with no cycle.
+- It is a documented, intentional departure from §8.2's *literal* placement, recorded in the file and the plan (L280–285, L414–415). §8.2 lists the enum next to entities for narrative convenience; nothing in §2/§3 requires a transversal enum to physically live in a feature's domain folder, and no migration is forced on T-14.
 
-- Direction violations: **0** · Circular dependencies: **0**
-- Clean: `result.dart → failure.dart` (one-way, intra-leaf); `core/error` depends on nothing in
-  `features/`, `app/`, or any layer above it.
-
-## Package / Module Structure
-
-- Single package; `core/error/` is a focused module with one clear responsibility (typed error
-  vocabulary). Test mirror exists at `test/core/error/`. Files are well-sized and YAGNI-correct
-  for the slice (no exceptions/Dio code pulled in early). No unnecessary dependencies.
+Caveat carried forward as Minor #1: keep `core/pokemon/` for primitives only; do not let it absorb domain entities later.
 
 ---
 
 ## Verdict
 
-**Architecture is clean — ready to merge.** No Critical or Important issues; 1 Minor (optional
-`@immutable` on `Result`) and 2 Suggestions, none blocking.
+**Architecture is clean — ready to merge.** Zero critical/important issues; the `PokemonTypeId → core/` decision is correct and well-documented, dependency direction is one-way with `core/` a verified leaf, the composition root is wired correctly, and the record→class icon migration is set up to be source-compatible for T-18. The minor items are forward-looking guard-rails for T-14/T-18, not blockers.
