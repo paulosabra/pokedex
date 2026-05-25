@@ -4,5 +4,6 @@ analyzer:
   exclude:
     - "**/*.g.dart"
     - "**/*.freezed.dart"
+    - "**/*.drift.dart"
     - "**/*.mocks.dart"
     - "**/*.config.dart"

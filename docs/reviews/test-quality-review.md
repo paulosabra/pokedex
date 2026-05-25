@@ -1,215 +1,139 @@
 ---
-title: "Test Quality Review — PR1 (data-part1)"
+title: "Test Quality Review — PR2 (data-part2)"
 date: 2026-05-25
-branch: feature/data-part1
+branch: feature/data-part2
 reviewer: Test Quality Agent (VGV)
-scope: Remote/Network stack — Dio client + 3 interceptors + ErrorMapper, Retrofit service, Freezed DTOs, RemoteDataSource
+scope: Local/Cache stack — Drift AppDatabase (T-09), PokemonDao + PokemonLocalDataSource (T-10), summary encoding utilities
 ---
 
 ## Test Quality Review
 
 ### Coverage Summary
 
-- **Test run**: Pass (all tests pass per prior verification)
-- **Coverage**: 100% line coverage on PR1 data+network files (verified via lcov)
-- **Files with tests**: 9/9 testable files covered
-  - `lib/core/network/dio_client.dart` → `test/core/network/dio_client_test.dart`
-  - `lib/core/network/error_mapper.dart` → `test/core/network/error_mapper_test.dart`
-  - `lib/core/network/interceptors/retry_interceptor.dart` → `test/core/network/interceptors/retry_interceptor_test.dart`
-  - `lib/core/network/interceptors/rate_limit_interceptor.dart` → `test/core/network/interceptors/rate_limit_interceptor_test.dart`
-  - `lib/core/network/interceptors/logging_interceptor.dart` → `test/core/network/interceptors/logging_interceptor_test.dart`
-  - `lib/features/pokemon/data/services/poke_api_service.dart` → `test/features/pokemon/data/services/poke_api_service_test.dart`
-  - `lib/features/pokemon/data/dtos/*.dart` (7 DTO files) → `test/features/pokemon/data/dtos/*_test.dart`
-  - `lib/features/pokemon/data/datasources/pokemon_remote_data_source.dart` → `test/features/pokemon/data/datasources/pokemon_remote_data_source_test.dart`
-- **Test helpers**: `test/helpers/fixtures.dart`, `test/helpers/queue_http_adapter.dart` — both present and appropriate
+- **Test run**: Pass (all tests pass; suite exits 0)
+- **Coverage (excl. generated files)**: 89.1% overall (261/293 covered lines)
+- **PR2 files at 100%**:
+  - `lib/features/pokemon/data/datasources/pokemon_dao.dart` — 68/68 lines
+  - `lib/features/pokemon/data/summary_encoding.dart` — 8/8 lines
+- **Below threshold — intentionally excluded per scope note**:
+  - `lib/core/database/app_database.dart` — 4/36 lines (11%). Covered lines are `AppDatabase.forTesting`, `schemaVersion`, `migration`/`onCreate`. The uncovered lines are Drift `Table` column getters and the `_openConnection()` production factory — all build-time/codegen artifacts or platform-level wiring that cannot be exercised in a unit test context. Per the review brief, this is not flagged as a gap.
+- **Not in lcov** (no executable lines): `lib/features/pokemon/domain/entities/pokemon_filter.dart`, `lib/features/pokemon/domain/entities/sort_criteria.dart`, `lib/core/database/cache_policy.dart`, `lib/core/pokemon/pokemon_type_id.dart` — all are `const`/`enum` declarations; Dart does not emit DA lines for them.
+- **Missing test files**: None — every testable unit added in PR2 has a corresponding test file.
 
 ---
 
-### Network / Core Test Quality
+### Test Infrastructure
 
-#### `test/core/network/error_mapper_test.dart`
+**In-memory DB setup**: `AppDatabase.forTesting(DatabaseConnection(NativeDatabase.memory(), closeStreamsSynchronously: true))` is the correct pattern. `closeStreamsSynchronously: true` prevents stream subscriptions from outliving the test (critical for the reactive stream test). The `tearDown(() => db.close())` correctly returns the `Future<void>` from `db.close()`, which `flutter_test`'s `tearDown` accepts as `FutureOr<void>` — no leaked connections across tests.
 
-**Result**: Pass with one important gap.
+**Test helper `summary()`**: the factory function with named parameters and sensible defaults (`generationId: 1`, `height: 7`, `weaknessMask: 0`) is clean, reduces duplication, and makes test data intent legible. It correctly delegates `nameNormalized` to `normalizeName(name)`, which means the helper double-encodes the same function under test in `summary_encoding_test.dart`. This is an acceptable tradeoff: the DAO tests need a realistic `nameNormalized` column to test search, and duplicating the normalization call here keeps the fixture consistent with production without extracting a shared constant.
 
-All 8 `DioExceptionType` values are explicitly covered — `connectionError` (NetworkFailure), the three timeout types consolidated in one test, `badResponse` subdivided into 404/429/500/503/other-4xx/missing-status-code, and the three catch-all transport types (`cancel`, `badCertificate`, `unknown`) as individual tests. A raw `FormatException` and a Dio-wrapped `FormatException` are both tested.
+**`ids()` helper**: extracts only the `id` from query results, making assertions concise and order-sensitive. The ordered nature of the list is load-bearing for the sort tests — this is correct.
 
-Assertions use `isA<XxxFailure>()` which verifies the subtype — that is the right level of assertion for a sealed sum type. The assertions are not tautological because the concrete subtype carries semantic meaning (it is what the UI and repository decision logic branch on).
+**Group structure**: five groups (`upsert + read`, `search`, `filters`, `sort`, `watchSummaries`) with a nested `setUp` in the groups that need data. The outer `setUp`/`tearDown` handle DB lifecycle; the inner group-level `setUp` handles fixture data. This is idiomatic and does not repeat setup across tests.
 
-**Gap — no identity/equality check on returned instances**: the `mapError` function returns `const XxxFailure()` from every branch (all constructors are `const`). While the subtype check is sufficient to validate routing correctness, a test that asserts `mapError(...) == const NotFoundFailure()` or `identical(mapError(...), const NotFoundFailure())` would additionally confirm the production code is returning a `const` singleton (a minor performance invariant) and would catch a future regression where someone adds a non-const path. This is low severity but worth noting.
+---
 
-**Gap — 500 vs 503 status codes share one `expect` call per test**: the test titled "500 and 503 map to ServerFailure" makes two `expect` calls inside a single `test(...)`. This is idiomatic for tightly related values and is not an anti-pattern here, but a reader scanning test names only sees one test for two distinct status codes. No structural problem; noted for completeness.
+### `test/features/pokemon/data/datasources/pokemon_dao_test.dart`
 
-#### `test/core/network/dio_client_test.dart`
-
-**Result**: Pass with one important weakness.
-
-The two tests verify base URL, connect/receive timeouts, and the presence of all three interceptor types. All `expect` calls assert concrete values (`pokeApiBaseUrl`, `Duration(seconds:10)`, `Duration(seconds:15)`, `hasLength(1)`).
-
-**Gap — interceptor ordering not asserted**: the production code attaches interceptors as `[RateLimitInterceptor, RetryInterceptor, LoggingInterceptor]`. This order matters at runtime: the rate-limit interceptor must precede the retry interceptor so that a 429 is caught by the 429-specific path rather than the generic 5xx retry path. The test asserts that each type is present (length 1 each) but does not assert their relative positions. If a future refactor reorders them, no test would fail. Checking `dio.interceptors.toList()[0]` is a `RateLimitInterceptor` and `[1]` is a `RetryInterceptor` would close this gap with a two-line addition.
-
-**Note — `sendTimeout` not configured**: the production `createPokeApiDio()` sets `connectTimeout` and `receiveTimeout` but does not set `sendTimeout`. This is consistent with what is tested and consistent with the plan spec (which only lists the two timeouts). No test gap here — just noting that a future addition of `sendTimeout` would need to be reflected in the test.
-
-#### `test/core/network/interceptors/retry_interceptor_test.dart`
+#### Upsert + Read group
 
 **Result**: Pass — strong.
 
-The test is structured around a `wire()` helper that attaches the interceptor with `baseDelay: Duration.zero` (eliminating real-time delays). The five test cases cover: (1) two sequential transient 5xx errors followed by success — verifying the retry loop and the `callCount` (3); (2) a `connectionError` followed by success — verifying non-`badResponse` transient types; (3) persistent 5xx exhausting `maxRetries` — verifying the cap (callCount 4 = 1 + 3); (4) a non-transient 404 — verifying no retry (callCount 1); and (5) all three non-transient transport types (`cancel`, `badCertificate`, `unknown`) as a loop — each asserts callCount 1 with a `reason:` label.
+Covers: round-trip with dual-type Pokémon asserting both `primaryTypeId` and `secondaryTypeId`; conflict update (same id, different name, asserts updated name); cache-miss returning `null` for `readSummary`; and a combined detail/evolution-chain/type-relation round-trip in a single test that asserts all three `payloadJson` values and the `readDetail(2)` miss.
 
-`callCount` assertions throughout make these behavioral tests rather than "doesn't throw" tests. The plan's requirement that `sendTimeout` and `receiveTimeout` (in addition to `connectionTimeout` and `connectionError`) are transient is verified indirectly through the production `_isTransient` method's coverage — the tests cover `connectionError` explicitly, and 5xx `badResponse` explicitly; the three timeout types are covered via `ErrorMapper` tests.
+The upsert overwrite test correctly exercises `insertOnConflictUpdate` by writing two companions with the same id and asserting the second name survives — this is the only way to prove the `ON CONFLICT REPLACE` behavior rather than a silent no-op.
 
-**Minor gap — timeout types not directly exercised in retry tests**: `connectionTimeout`, `sendTimeout`, and `receiveTimeout` are in the `_isTransient` switch but the retry interceptor tests only exercise `connectionError` and `badResponse`. The `ErrorMapper` tests confirm these types exist on the `DioExceptionType` enum, and `_isTransient` coverage is implicitly 100% (since the overall file has 100% coverage). However, a future reader cannot distinguish "timeout retries are tested" from "the interpreter hit those switch arms during the adapter's fake response path". Adding one test that injects a `DioException(type: DioExceptionType.connectionTimeout)` from the adapter would make the transient-timeout retry contract explicit.
+**Gap — `readEvolutionChain` and `readTypeRelation` null-miss not tested**: `readSummary(999)` has an explicit null-miss test at line 99. `readDetail(2)` has a null-miss assertion at line 128. However, `readEvolutionChain` and `readTypeRelation` null-miss paths have no corresponding assertion. The implementations are identical one-liners (`getSingleOrNull()`), so the regression risk is low, but completeness calls for at least one `expect(await dao.readEvolutionChain(999), isNull)` in the round-trip test.
 
-#### `test/core/network/interceptors/rate_limit_interceptor_test.dart`
+#### Search group
 
-**Result**: Pass — all three Retry-After paths covered with meaningful assertions.
+**Result**: Pass — strong. All four search paths exercised meaningfully.
 
-Six test cases: (1) numeric `Retry-After: 0` → retry succeeds, callCount 2; (2) HTTP-date Retry-After in the past (injected `now` fixed at 2030) → immediate retry, callCount 2; (3) absent Retry-After → fallback, callCount 2; (4) unparseable Retry-After (`not-a-date`) → fallback, callCount 2; (5) persistent 429 exhausts maxRetries, callCount 4; (6) non-429 error is not retried, callCount 1.
+- Partial substring (`'saur'` → `[1, 2]`): confirms `LIKE '%saur%'` matches both ids without returning non-matches.
+- Case-insensitive (`'CHARMANDER'` → `[4]`): confirms `normalizeName` lowercases the query before the SQL `LIKE`.
+- Accent-insensitive RN-07 (`'flabe'` → `[669]` and `'FLABÉBÉ'` → `[669]`): two sub-assertions in one test confirm both directions — unaccented query finding accented data, and accented uppercase query normalized to find the same row. This is the most important search invariant.
+- Leading-zero number search RN-06 (`'4'`, `'04'`, `'004'` all → `[4]`): three assertions in one test confirm `int.parse` strips zeros before the `id.equals(id)` predicate.
+- No-match returns empty, not error.
 
-The `now` injection is correctly used to make the HTTP-date path deterministic without a real delay. The `fallbackDelay: Duration.zero` in the test wiring eliminates real-time delays.
+**Gap — whitespace-only query not tested**: the production code calls `query?.trim() ?? ''` before checking `term.isNotEmpty`. A query of `'  '` (whitespace only) should behave identically to `null` (no filter applied, all rows returned). This path is not tested. With the filter group's five-row dataset it would be straightforward: `expect(await ids(query: '  '), [1, 4, 31, 143, 152])`. If the trim were ever removed or broken, this would silently change behavior.
 
-**Gap — HTTP-date in the future not tested**: the HTTP-date parse path has two sub-branches: `delta.isNegative ? Duration.zero : delta`. The test covers the negative-delta branch (date in the past, immediate retry). The positive-delta branch (date in the future, actual delay) is not exercised. In a test context this can't easily fire without introducing a real `await Future.delayed`, but with `fallbackDelay: Duration.zero` the test could set `retryAfter` to an IMF-fixdate a few milliseconds in the future and rely on `Duration.zero` clamping in the `_retryAfter` not being triggered (i.e., the delta is small and positive). More practically, the current test coverage confirms the HTTP-date parse itself works; the positive-delay branch is an `else delta` that is simple enough that the gap is minor. Still, the `_retryAfter` function's positive-delta branch is the only untested logic path across all PR1 production code, which is worth flagging since the plan calls for 100% data+network coverage.
+**Gap — numeric no-match not tested explicitly**: there is a name-query no-match test (`'mewtwo'` → empty). There is no equivalent for a numeric query that finds nothing (e.g., `query: '999'`). The no-match path for the numeric branch (`id.equals(999)` returning an empty list) is not exercised. This is a minor gap given the implementation is a straightforward Drift `where`/`getSingleOrNull`, but adding `expect(await ids(query: '999'), isEmpty)` would make coverage of both search branches' zero-result paths symmetric.
 
-**Minor — `_expectImmediateRetry` is extracted as a top-level function outside `main()`**: this is an unusual pattern — the helper is only used by one test. It was presumably extracted to work around Dart's inability to call `return` on an `async` test body that is nested and named inline. This is a tooling workaround, not a quality problem, but it means the test body for "honors an HTTP-date Retry-After in the past" is not co-located with the rest of the test cases. Consider inlining it as a local function inside the group.
+#### Filters group
 
-#### `test/core/network/interceptors/logging_interceptor_test.dart`
+**Result**: Pass — good coverage of each filter dimension independently.
 
-**Result**: Acceptable, with a known inherent limitation.
+- Type filter: three sub-assertions cover primary-only match (`fire` → `[4]`), secondary-only match (`poison` → `[1]`), and shared-primary match (`grass` → `[1, 152]`). The secondary-only assertion is important because the SQL uses `primaryTypeId.isIn(ids) | secondaryTypeId.isIn(ids)` — if the `|` were accidentally dropped, only the secondary-only case would catch it.
+- Generation filter: `generationId: 2` → `[152]`. Correct.
+- Height bucket filter: all three categories tested with representative values (7, 6, 9 dm for short; 13 dm for medium; 21 dm for tall). The SQL predicates `isSmallerThanValue(10)`, `isBiggerOrEqualValue(10) & isSmallerThanValue(20)`, and `isBiggerOrEqualValue(20)` are thus exercised by values within each range, not at the boundaries.
+- Weakness bitmask filter: fire-weak Pokémon (`[1]`), water-weak (`[4]`), zero-mask never matches (`grass` weakness → empty).
+- Combined intersection: type+generation.
+- Zero-result intersection.
 
-Two tests: (1) successful request passes through unchanged (asserts `response.statusCode == 200`); (2) error passes through without being swallowed (asserts `throwsA(isA<DioException>())`).
+**Gap — height boundary values not exercised**: the `_shortMaxDecimetres = 10` (exclusive upper bound for "short") and `_tallMinDecimetres = 20` (inclusive lower bound for "tall") constants are never tested AT the boundary. No test row has `height: 10` (which should be "medium", not "short") or `height: 20` (which should be "tall", not "medium"). If the predicates were accidentally written as `isSmallerOrEqualValue(10)` or `isBiggerThanValue(20)`, the existing tests would not detect the off-by-one. Adding two fixture rows — one at exactly 10 dm (expected: medium) and one at exactly 20 dm (expected: tall) — would close this gap.
 
-**Limitation — logging side-effect not asserted**: `LoggingInterceptor.onRequest`, `onResponse`, and `onError` each call `developer.log(...)`. The tests verify the pass-through contract (responses and errors propagate) but do not verify that logging actually occurred. This is the standard tradeoff with `dart:developer` — it goes to a platform-specific sink with no public test API. The tests are therefore as complete as they can be without mocking the `dart:developer` namespace or injecting a logger. This is not a gap created by the test author; it is an inherent constraint of the logging approach. **Noted without a required fix.**
+**Gap — multi-type filter set not tested**: all `types:` assertions use a single-element set. The SQL for a multi-element set (`types: {grass, fire}`) uses `primaryTypeId.isIn([0, 2]) | secondaryTypeId.isIn([0, 2])` — a union that should return both Grass-type and Fire-type Pokémon. This OR-union behavior is never exercised. With the filter group's existing dataset (bulbasaur=grass, charmander=fire), `ids(filter: const PokemonFilter(types: {PokemonTypeId.grass, PokemonTypeId.fire}))` should return `[1, 4, 152]` (charmander primary fire, bulbasaur+chikorita primary grass). If `.isIn` were accidentally replaced with `.equals(ids.first)`, only the single-element tests would catch it.
 
-**Minor weakness — only one success fixture tested**: the test uses `jsonOk('{"ok":true}')` — a hand-constructed minimal JSON body. Since the `LoggingInterceptor` is pass-through and does not inspect the body, this is fine. However, the test verifies `statusCode == 200` but not the response body. Since the interceptor's job is pass-through, the right assertion here is actually a body round-trip check to prove the interceptor does not mutate the response. Adding `expect(response.data, {'ok': true})` would strengthen this from "status passes through" to "entire response passes through untouched."
+**Gap — multi-weakness filter set not tested**: all `weaknesses:` assertions use a single-element set. A multi-element set (e.g., `weaknesses: {fire, water}`) would compute `queryMask = fire_bit | water_bit` and apply `stored_mask & queryMask != 0` — OR semantics (weak to fire OR water). With bulbasaur (fire-weak) and charmander (water-weak), this query should return `[1, 4]`. This is untested. If the mask computation in `typeWeaknessMask(filter.weaknesses)` were subtly wrong for multi-element inputs, only a multi-element test would catch it.
 
----
+**Gap — combined filter combinations limited**: the only combined-dimension test pairs `types` + `generationId`. No test exercises `types` + `height`, `weaknesses` + `height`, or a three-dimension combination. These combinations exercise the accumulation of multiple `where()` calls on the same `SimpleSelectStatement`. While each dimension works independently, a regression in the accumulation logic (e.g., a premature `return statement` or an incorrect guard condition) would only be caught by multi-dimension tests.
 
-### DTO Test Quality
-
-#### `test/features/pokemon/data/dtos/pokemon_dto_test.dart`
-
-**Result**: Pass — strong fixture-driven coverage with meaningful field-level assertions.
-
-Three test cases: dual-type Bulbasaur, single-type Pikachu, and a minimal TE-10 payload. The Bulbasaur test asserts `id`, `name`, `height`, `weight`, `baseExperience` non-null, types count 2 with `containsAll`, `stats hasLength(6)`, abilities non-empty, and the nested `officialArtwork.frontDefault` containing the expected URL fragment. The Pikachu test asserts `types.single.type.name == 'electric'`, catching the single-element list regression. The TE-10 minimal test asserts all optional fields are null/empty.
-
-**Gap — `stats` values not checked**: the test asserts `dto.stats hasLength(6)` but does not check any individual stat's `baseStat`, `effort`, or `stat.name`. Since the mapper (PR3) will read `baseStat` values to compute Min/Max, a deserialization bug (e.g., `base_stat` silently returning 0 because the snake-case rename missed a hyphen or nesting) would not be caught here. At minimum one stat — say, HP — should have its `baseStat` asserted against the fixture value.
-
-**Gap — `abilities` field**: the test asserts `dto.abilities isNotEmpty` for Bulbasaur but does not check any ability's `name` or `isHidden` flag. Similarly to stats, the `isHidden` flag is used in PR3 to populate the ability entity's `isHidden` property. A regression in that field's deserialization would be invisible.
-
-**Gap — `slot` field on type slots not asserted**: the comment "order is asserted in the PR3 mapper" is reasonable, but the `slot` field itself is a required field on `PokemonTypeSlotDto` and is entirely untested here. If `slot` were deserialized as `0` for all slots due to a name mismatch, the PR3 sort-by-slot logic would fail silently.
-
-#### `test/features/pokemon/data/dtos/evolution_chain_dto_test.dart`
-
-**Result**: Pass — covers both structural shapes (linear chain and branching chain).
-
-The Bulbasaur linear test traverses the full three-stage chain, asserting species names at each level and `evolutionDetails[0].minLevel == 16` on the Ivysaur node. The Eevee branching test asserts eight evolutions and spot-checks one name (`vaporeon`).
-
-**Gap — `isBaby` field not tested for true**: both tests check `isBaby` (Bulbasaur asserts `isFalse`), but no fixture or inline payload exercises `isBaby: true`. The `@Default(false)` on the field means a missing key is silently treated as `false`, which is correct, but the true-value path is never exercised. While no Gen-I starter is a baby Pokémon, a fixture with `"is_baby": true` on a root node would close the gap and confirm Freezed correctly deserializes the boolean when present.
-
-**Gap — `EvolutionDetailDto` nullable fields not directly tested**: the Bulbasaur test asserts `minLevel == 16`, which is the non-null path for that field. The nullable fields (`item`, `heldItem`, `minHappiness`, `timeOfDay`, `location`, `knownMove`, `gender`) are all present in the DTO but are never individually asserted to be `null` on a fixture that doesn't contain them, nor asserted to be non-null on a fixture that does. The PR3 mapper's `evolutionDetails[0].minLevel` (level-based evolution condition) depends on these nullable fields. The current test leaves the TE-10 coverage of individual evolution detail fields to implicit Freezed behavior.
-
-#### `test/features/pokemon/data/dtos/pokemon_species_dto_test.dart`
-
-**Result**: Pass — two meaningful real-fixture tests.
-
-Bulbasaur test asserts `id`, `name`, `genderRate`, `captureRate > 0`, `growthRate.name` non-empty, `generation.name`, `eggGroups` non-empty, `flavorTextEntries` non-empty, `genera` non-empty, and `evolutionChain.idFromUrl` non-null.
-
-Ditto test asserts `name` and `genderRate == -1` — the critical genderless-species case for the PR3 gender mapper.
-
-**Gap — `hatchCounter` and `baseHappiness` not asserted**: these are required fields on the DTO that feed the PR3 `Training` entity. They are never checked. A deserialization error (wrong field name, wrong type) would be invisible.
-
-**Gap — `flavorTextEntries` content**: the test asserts `flavorTextEntries isNotEmpty` but does not drill into the structure (e.g., `entries.first.language.name` or `entries.first.flavorText` being non-empty). The PR3 description mapper picks the English flavor text using `language.name == 'en'`; a bug in the nested `FlavorTextEntryDto.language` deserialization would not be caught.
-
-**Gap — no TE-10 (missing-fields) test**: unlike `pokemon_dto_test.dart` which has an explicit TE-10 case, `pokemon_species_dto_test.dart` does not test what happens when optional list fields (`eggGroups`, `flavorTextEntries`, `genera`) are absent. These fields have `@Default` on their Freezed constructors, so this is less critical than for non-defaulted optional fields, but consistency with the other DTO tests and the plan's explicit TE-10 requirement is missing.
-
-#### `test/features/pokemon/data/dtos/location_area_encounter_dto_test.dart`
-
-**Result**: Pass — covers both the non-empty (fixture) and empty-array edge cases.
-
-The Pikachu fixture test asserts `encounters isNotEmpty`, `first.locationArea.name isNotEmpty`, `versionDetails isNotEmpty`, `versionDetails.first.version.name isNotEmpty`, and `encounterDetails isNotEmpty`. The empty-array test asserts `isEmpty`.
-
-**Gap — `maxChance` and `EncounterDetailDto` fields not asserted**: `VersionEncounterDetailDto.maxChance` (required `int`) and the `EncounterDetailDto` fields `chance`, `minLevel`, `maxLevel`, and `method.name` are never individually verified. Since the Pikachu fixture has concrete numeric values for all these fields, adding at minimum `expect(first.versionDetails.first.maxChance, greaterThan(0))` and `expect(first.versionDetails.first.encounterDetails.first.chance, greaterThan(0))` would confirm the numeric fields are correctly deserialized.
-
-#### `test/features/pokemon/data/dtos/type_dto_test.dart`
-
-**Result**: Pass — covers two semantically distinct type configurations.
-
-Grass type test asserts `id == 12`, `name == 'grass'`, `doubleDamageFrom` contains `'fire'`, `doubleDamageTo` contains `'water'`. Ground type test asserts `name == 'ground'`, `noDamageFrom` contains `'electric'`. The immunity test is the most important case because the `noDamageFrom` list drives the `0×` multiplier in the PR3 weakness math.
-
-**Gap — `halfDamageFrom`/`halfDamageTo`/`noDamageTo` lists never checked**: the `DamageRelationsDto` has six directional lists but only `doubleDamageFrom`, `doubleDamageTo`, and `noDamageFrom` are tested. The `halfDamageFrom` and `halfDamageTo` lists are critical for the `0.5×` multiplier in the PR3 `type_effectiveness.dart` computation. A deserialization bug in either half-damage list would produce wrong weakness results without any test catching it here. The electric and poison type fixtures in `test/fixtures/` provide concrete half-damage data that could be used.
-
-**Gap — only two of four type fixtures are used**: `test/fixtures/` contains `type_electric.json`, `type_grass.json`, `type_ground.json`, and `type_poison.json`. Only grass and ground are used. The electric fixture (`id: 13`, `doubleDamageFrom: ['ground']`) and poison fixture (`id: 4`, `halfDamageTo: [...]`, `noDamageTo: ['steel']`) sit unused. This is not a coverage gap per se (the DTO structure is uniform), but the poison `noDamageTo` list being untested means the `noDamageTo` deserialization path is exercised only implicitly via Freezed `@Default`.
-
-#### `test/features/pokemon/data/dtos/named_api_resource_dto_test.dart`
-
-**Result**: Pass — thorough for a small utility DTO.
-
-Four `idFromUrl` sub-tests cover: standard trailing-id URL, URL without trailing slash, URL with no trailing integer, and empty string. Both `name` defaulting and explicit `name` presence are tested.
-
-No gaps found. This is the most thoroughly exercised DTO relative to its surface area.
-
-#### `test/features/pokemon/data/dtos/pokemon_list_response_dto_test.dart`
+#### Sort group
 
 **Result**: Pass.
 
-Two tests: a full page with pagination cursors (asserts `count`, `next` non-null, `previous` null, `results hasLength(2)`, `results.first.idFromUrl == 1`) and a TE-10 minimal payload with `count: 0` (asserts `results isEmpty`, `next null`).
+Both `numberAsc`/`numberDesc` and `nameAsc`/`nameDesc` are tested with a three-element dataset that has non-trivial ordering (ids 1, 2, 4; names bulbasaur, ivysaur, charmander). The assertions are expressed as full id lists — order-sensitive, not just set membership. This correctly validates sort direction.
 
-No gaps found. The `idFromUrl` delegation to `NamedApiResourceDto` is correctly tested in the `NamedApiResourceDto` tests.
+Note: `nameAsc`/`nameDesc` sorts on `t.name` (the raw display name), not `t.nameNormalized`. The test data is all ASCII, so there is no observable difference between the two columns. This is consistent with the production code and deliberate per design. No gap here, but if Pokémon with leading accented characters (e.g., hypothetical names starting with `é`) were ever in the dataset, sorting on `t.name` vs. `t.nameNormalized` would produce different results. This is a future maintenance concern, not a current test gap.
 
----
+#### watchSummaries group
 
-### Service Test Quality
+**Result**: Pass — the listener+pumpEventQueue approach is correct and the race condition noted in the comment is real.
 
-#### `test/features/pokemon/data/services/poke_api_service_test.dart`
+The test avoids the subscribe/insert race by using an explicit listener, pumping the event queue after subscription (to observe the initial empty emit), then inserting, then pumping again. This is more deterministic than `expectLater(..., emitsInOrder([...]))`, which can miss the initial emission if the insert fires before the stream delivers. The plan suggested `emitsInOrder` but the implementation's choice is strictly better.
 
-**Result**: Pass — each endpoint verified for path, query parameters, and return-value field.
+**Gap — watchSummaries asserts list length, not row identity**: `lengths` collects only `rows.length`. The first emission confirms `length == 0` (empty cache observed), the second confirms `length == 1` (one row inserted). The test does not assert that the emitted row is the correct row (e.g., `rows.first.id == 1` or `rows.first.name == 'bulbasaur'`). A bug that emitted the wrong row — or a different row previously in a leaked DB state — would not be caught. Adding `expect(rows.first.id, 1)` on the second emission would close this without structural change.
 
-The `serviceReturning()` helper creates a real `Dio` with the `QueueHttpAdapter` serving a single `jsonOk(body)` response. `path()` and `query()` helpers inspect `adapter.lastOptions!.uri` to verify the exact path and query parameters.
-
-Six tests: `getPokemonList` (asserts `count`, path ends with `/pokemon`, `limit`/`offset` query params); `getPokemon` (asserts `result.name`, path ends with `/pokemon/1`); `getSpecies` (asserts `result.id`, path); `getEvolutionChain` (asserts `result.id`, path); `getType` (asserts `result.name`, path); `getEncounters` (asserts result non-empty, path).
-
-**Gap — error behavior not tested**: the service tests only cover the success path. `PokeApiService` is generated by Retrofit; Retrofit's error handling (wrapping HTTP errors in `DioException`) is exercised by the interceptor tests, so this is not a critical gap. However, a test confirming that a 404 response from the adapter propagates as a `DioException` (rather than, say, silently returning null) would add a layer of defense against future Retrofit version changes. This is a suggestion, not a required fix.
-
-**Gap — `getPokemonList` with `limit=0` or `offset=0` as boundary values**: only `limit=20, offset=40` is tested. Offset 0 (first page) is used in the remote data source tests but never in the service test itself. Minor.
-
-**Gap — no test for the service's `baseUrl` override**: the `@RestApi(baseUrl: ...)` annotation sets the base URL, but the test constructs `Dio` with an explicit `baseUrl`. The service can be constructed with a custom `baseUrl` override (`PokeApiService(dio, baseUrl: '...')`). This is a Retrofit feature, not tested here, which is acceptable for a codegen integration test.
+**Gap — watchSummaries does not test re-emit on UPDATE**: the stream test covers the insert path (empty → non-empty). Drift's `watch()` also re-emits on UPDATE (the conflict-update path). The DAO has an explicit upsert-overwrites test, but there is no test confirming that `watchSummaries` re-emits after a conflict-update upsert. This is a lower-priority gap since Drift's internal watch mechanism is library-tested, but from a contract perspective `watchSummaries` should re-emit whenever the matching rows change — including mutations, not just insertions.
 
 ---
 
-### DataSource Test Quality
+### `test/features/pokemon/data/summary_encoding_test.dart`
 
-#### `test/features/pokemon/data/datasources/pokemon_remote_data_source_test.dart`
+**Result**: Pass — correct and complete for the cases tested.
 
-**Result**: Pass — correct fake/mock strategy with meaningful behavior assertions.
+**`normalizeName` group**:
 
-Uses mocktail (`_MockPokeApiService extends Mock implements PokeApiService`) for the service layer, which is the VGV-specified mocking library. `PokemonRemoteDataSourceImpl` is the subject under test (not mocked). All error mapping tests use `throwsA(isA<XxxFailure>())` — the right assertion for the translation contract.
+- Lowercase: two assertions (`Bulbasaur` and `PIKACHU`). The implementation lowercases before the diacritics lookup, so uppercase accented input (e.g., `'NIDORÁN'` → `'nidoran'`) is exercised in the third test and confirms that the `toLowerCase()` + map-on-lowercase-keys approach works end-to-end for both lowercase and uppercase input.
+- Diacritics RN-07: `'Flabébé'` → `'flabebe'`, `'Pokémon'` → `'pokemon'`, `'NIDORÁN'` → `'nidoran'`. These cover the `é` and `á` entries in the map, confirming the rune-iteration approach handles multi-byte characters correctly.
+- Unmapped characters (`Farfetch'd`, `Ho-Oh`): confirms the `?? char` fallback preserves non-diacritic characters.
 
-Four success tests: `fetchPage`, `fetchPokemon`, `fetchEvolutionChain`, `fetchEncounters`. Five error-mapping tests: 404→NotFoundFailure, FormatException→ParsingFailure, connectionTimeout→TimeoutFailure, 5xx→ServerFailure, connectionError→NetworkFailure.
+**Gap — not all diacritic entries exercised**: the `_diacritics` map has 25 entries covering `á à â ä ã å / é è ê ë / í ì î ï / ó ò ô ö õ / ú ù û ü / ç / ñ`. The tests only exercise `é` (Flabébé, Pokémon) and `á` (NIDORÁN). The remaining 23 entries are never directly tested. The relevant Pokémon names that use them (e.g., Farfetch'd uses `'`, not a diacritic; no gen-I Pokémon uses `ü` or `ç`) are rarely encountered. This is a coverage gap the tool does not surface because the individual `if`/`else` branch inside the rune loop is covered by any single diacritic entry hit. The gap matters if a future maintainer adds a new Pokémon name containing, e.g., `ñ` or `ö` and the normalization silently fails due to a typo in the map entry. Adding `expect(normalizeName('señor'), 'senor')` and `expect(normalizeName('über'), 'uber')` would provide two additional anchor tests without verbosity.
 
-**Gap — `fetchSpecies` success not tested**: `fetchSpecies` is one of the six public methods on `PokemonRemoteDataSource` and has no success-path test. The error-mapping mechanism is shared via `_guard<T>()`, so the error behavior is implicitly covered by the tests for `fetchPage`, `fetchPokemon`, `fetchSpecies` (error), `fetchType` (error). But the success path for `fetchSpecies` — confirming the DTO is passed through without transformation — is missing. This follows the pattern of the other four success tests and should be added.
+**`typeWeaknessMask` group**:
 
-**Gap — `fetchType` success not tested**: same as `fetchSpecies`. `fetchType` appears only in an error-path test (`fetchType maps a connection error to NetworkFailure`). The success path is not tested.
+- Empty set → 0. Correct.
+- Single type at index 0 (grass) → 1, index 1 (poison) → 2, index 2 (fire) → 4. Confirms `1 << index` bit placement for the three lowest indices.
+- Multi-type OR: `{grass, fire}` → `1 | 4 = 5`. Confirms the fold. The sub-assertions `mask & grassMask isNonZero` and `mask & fireMask isNonZero` and `mask & waterMask == 0` verify the bitmask semantics beyond just checking the numeric value.
 
-**Gap — `fetchEncounters` error not tested**: `fetchEncounters` has a success test (returns empty list) but no error test. Of the six methods, only `fetchPage`, `fetchPokemon`, `fetchSpecies`, and `fetchType` have error-path tests. `fetchEncounters` and `fetchEvolutionChain` (which also only has a success test) lack error coverage. Since error handling is uniform via `_guard`, this does not represent a logic risk, but it does mean that if `_guard` were accidentally removed from those two methods, no test would catch it.
-
-**Note — `verify()` usage on `fetchPage` success**: `verify(() => api.getPokemonList(20, 0)).called(1)` in the `fetchPage` test is over-verification of a pure delegation. The more important assertion (`expect(result, dto)`) already proves the call was made (the mock would not have returned `dto` otherwise). The `verify` call is not harmful, but it binds the test to the implementation detail that delegation happens exactly once. In the other success tests, `verify` is correctly absent. Removing it from the `fetchPage` test would be consistent.
+**Gap — high-index type not tested**: `PokemonTypeId` has 18 values (index 0–17). The highest index tested is `fire` (index 2). The bit encoding for `steel` (index 17) would be `1 << 17 = 131072`. A test `expect(typeWeaknessMask({PokemonTypeId.steel}), 1 << 17)` would confirm no off-by-one in the bit shift for indices beyond the low range. This matters for the DAO's bitmask `&` filter: if the high bit were ever stored as 0 due to integer overflow (Dart uses 64-bit ints, so 1 << 17 is safe, but worth confirming), the weakness filter for Steel-weak Pokémon would silently fail.
 
 ---
 
-### Test Helpers Quality
+### `test/features/pokemon/domain/entities/pokemon_filter_test.dart`
 
-#### `test/helpers/queue_http_adapter.dart`
+**Result**: Pass — covers the three canonical behaviors of a Freezed value object.
 
-**Result**: Strong design.
+- Default construction: asserts `types isEmpty`, `weaknesses isEmpty`, `height isNull`. Confirms the `@Default` annotations work.
+- Value equality: two identical filters assert `equals` and matching `hashCode`. This is the critical test for use as a map key or in `== `comparisons in the repository and UI layer.
+- `copyWith`: a base filter with `types: {fire}` gets `height: short` applied; asserts the original `types` is preserved and the new `height` is present.
 
-The `QueueHttpAdapter` correctly implements `HttpClientAdapter` with a queue of responders that replays the last responder on exhaustion. `callCount` and `lastOptions` fields enable behavioral assertions. Responders can throw, enabling connection-error simulation. The two factory functions (`jsonOk`, `status`) are clean and cover the two cases needed across all interceptor tests.
+**Gap — inequality not tested**: the equality test only confirms that two equal objects are equal. It does not confirm that two different filters are not equal (e.g., `PokemonFilter(types: {fire}) != PokemonFilter(types: {grass})`). While Freezed's `==` implementation is known-correct, an explicit `isNot(equals(...))` assertion documents the contract and would catch a regression if the equality were ever accidentally hand-overridden.
 
-**Observation — `lastOptions` is nullable but never guarded**: callers use `adapter.lastOptions!` (force-unwrap). This is safe because `lastOptions` is always set when `callCount > 0`, and all callers assert on it only after making a request. The null safety is implicit. Adding a `late RequestOptions lastOptions` and initializing it in `fetch` (removing the nullable `?`) would eliminate the force-unwrap and make the invariant explicit. Minor style suggestion.
+**Gap — `copyWith` clearing a nullable field to `null` not tested**: `height` is `HeightCategory?` (nullable). The test covers setting `height` from null to a non-null value, but not the reverse — clearing `height` back to `null` via `copyWith(height: null)`. Freezed's generated `copyWith` for nullable fields uses `Object?` sentinel semantics (passing `null` explicitly clears the field). If a future refactor introduces a custom `copyWith` without the sentinel pattern, this path would break. Adding `expect(base.copyWith(height: HeightCategory.short).copyWith(height: null).height, isNull)` would close this gap.
 
-#### `test/helpers/fixtures.dart`
-
-**Result**: Correct and minimal.
-
-`fixture(name)` returns raw `String`; `fixtureJson(name)` returns `Map<String, dynamic>`; `fixtureJsonArray(name)` returns `List<dynamic>`. Appropriate separation for DTO (object) and encounter (array) cases. No issues.
+**Gap — `weaknesses` field not tested in `copyWith`**: the `copyWith` test only exercises `height`. The `weaknesses` field (a `Set<PokemonTypeId>`) is never tested in a `copyWith` scenario, nor is `types` mutated via `copyWith`. Given Freezed generates a uniform `copyWith`, this is low-risk, but a single `expect(filter.copyWith(weaknesses: {PokemonTypeId.fire}).weaknesses, {PokemonTypeId.fire})` would complete the coverage.
 
 ---
 
@@ -217,40 +141,39 @@ The `QueueHttpAdapter` correctly implements `HttpClientAdapter` with a queue of 
 
 | Location | Anti-pattern | Issue | Fix |
 |---|---|---|---|
-| `pokemon_remote_data_source_test.dart:40` | Over-verification | `verify(() => api.getPokemonList(20, 0)).called(1)` is redundant — the mock's `thenAnswer` already guarantees the call happened (the DTO was returned). | Remove the `verify` call; the `expect(result, dto)` assertion is sufficient. |
-| `logging_interceptor_test.dart` | Missing side-effect assertion | `LoggingInterceptor` calls `developer.log(...)` on every path but no test confirms logging actually fires. | Inject a `Logger` interface or accept the constraint as inherent to `dart:developer`. If the team later moves to a `package:logging` based approach, this should be revisited. |
-| `rate_limit_interceptor_test.dart:45-48` | Helper extracted out of group scope | `_expectImmediateRetry` is a top-level function outside `main()`, used by exactly one test. This scatters the test logic. | Inline as a local `async` function inside the group. |
+| `pokemon_dao_test.dart:308` | Asserting count instead of identity | `watchSummaries` test collects only `rows.length` into `lengths`. A wrong row being emitted would not be caught. | Add `rows.first.id == 1` (or equivalent name assertion) to the second emission check. |
+| `pokemon_dao_test.dart:265–284` | Incomplete combination coverage | "combined filters intersect" only tests `types + generationId`. Other dimension pairings (`types + height`, `weaknesses + height`) are untested, leaving the multi-where accumulation logic unverified end-to-end. | Add one more combined-filter test pairing a different dimension combination (e.g., `height: short` + `generationId: 1`). |
 
 ---
 
 ### Recommendations
 
-1. **Assert interceptor order in `dio_client_test.dart`** (Important): Add `expect(dio.interceptors.toList()[0], isA<RateLimitInterceptor>())` and `expect(dio.interceptors.toList()[1], isA<RetryInterceptor>())`. The ordering matters for correctness and is the only structural invariant not currently tested.
+1. **[Important] Add height exact-boundary rows to the filter group** (`pokemon_dao_test.dart`): Insert rows at exactly 10 dm and 20 dm and assert they fall into the correct bucket (medium and tall, respectively). The current off-by-one boundary for `isSmallerThanValue(10)` vs. `isSmallerOrEqualValue(10)` would be silently wrong without this. This is the highest-risk untested SQL predicate in the DAO.
 
-2. **Add `fetchSpecies` and `fetchType` success tests + `fetchEncounters` and `fetchEvolutionChain` error tests to `pokemon_remote_data_source_test.dart`** (Important): These four test gaps leave two methods with only a success path, two with only an error path. Each is one `when`/`thenAnswer` + `expect` pair.
+2. **[Important] Assert row identity in `watchSummaries`** (`pokemon_dao_test.dart`): Change the listener to collect `rows.first.id` (or `rows.map((r) => r.id).toList()`) and assert `[1]` on the second emission alongside the existing length check. A length-only assertion does not verify the content of reactive emissions.
 
-3. **Assert at least one `baseStat` value in `pokemon_dto_test.dart`** (Important): The PR3 Min/Max computation reads `baseStat`; a deserialization bug is silent without this check. Use the Bulbasaur fixture's HP stat value.
+3. **[Important] Add multi-type filter set test** (`pokemon_dao_test.dart`): Test `PokemonFilter(types: {PokemonTypeId.grass, PokemonTypeId.fire})` against the existing filter group dataset and assert the union result `[1, 4, 152]`. The `isIn()` OR logic is only tested via single-element sets currently.
 
-4. **Add `halfDamageFrom`/`halfDamageTo` assertions to `type_dto_test.dart`** (Important): These lists drive the `0.5×` multiplier in PR3 weakness math. Use the existing `type_electric.json` or `type_poison.json` fixtures.
+4. **[Suggestion] Add whitespace-only query test** (`pokemon_dao_test.dart`): `expect(await ids(query: '  '), [1, 4, 31, 143, 152])` (using the filter group's setUp data) confirms the `trim()` guard treats whitespace as an absent query.
 
-5. **Add a TE-10 missing-fields test to `pokemon_species_dto_test.dart`** (Suggestion): Consistent with `pokemon_dto_test.dart` and the plan's explicit TE-10 requirement. Pass a minimal map with only required fields and assert the three defaulted lists are empty.
+5. **[Suggestion] Add numeric no-match test** (`pokemon_dao_test.dart`): `expect(await ids(query: '999'), isEmpty)` mirrors the existing name no-match test and makes zero-result coverage symmetric for both search branches.
 
-6. **Test `isBaby: true` in `evolution_chain_dto_test.dart`** (Suggestion): Either add an inline minimal JSON object with `"is_baby": true` to one test, or add a baby Pokémon fixture (e.g., Togepi). This confirms Freezed deserializes the boolean when present, not just when absent.
+6. **[Suggestion] Test high-index bit in `typeWeaknessMask`** (`summary_encoding_test.dart`): `expect(typeWeaknessMask({PokemonTypeId.steel}), 1 << 17)` confirms the bit shift is correct at the 18th type (index 17), which is the uppermost bit in the 18-bit mask scheme used by the DAO's `weaknessMask & :mask` filter.
 
-7. **Assert `slot` on `PokemonTypeSlotDto` and at least one stat's `baseStat` in `pokemon_dto_test.dart`** (Suggestion): The `slot` field drives type-ordering in PR3; a zero-default bug is invisible without this check.
+7. **[Suggestion] Test `copyWith` clearing `height` to null and mutating `weaknesses`** (`pokemon_filter_test.dart`): One additional test closing the two `copyWith` field paths not yet exercised.
 
-8. **Inline `_expectImmediateRetry` in `rate_limit_interceptor_test.dart`** (Suggestion): Move the helper inside the group as a local function for co-location of test logic.
+8. **[Suggestion] Add multi-weakness set test** (`pokemon_dao_test.dart`): `PokemonFilter(weaknesses: {PokemonTypeId.fire, PokemonTypeId.water})` should return `[1, 4]` (bulbasaur fire-weak, charmander water-weak) — confirming OR semantics within the weakness set via the bitmask `&` operation.
 
-9. **Assert `LoggingInterceptor` response body pass-through** (Suggestion): Add `expect(response.data, {'ok': true})` to the success test in `logging_interceptor_test.dart` to confirm the interceptor does not mutate responses.
+9. **[Suggestion] Add `readEvolutionChain` and `readTypeRelation` null-miss assertions** (`pokemon_dao_test.dart`): Extend the round-trip test with `expect(await dao.readEvolutionChain(999), isNull)` to match the existing `readSummary` and `readDetail` null-miss tests.
 
 ---
 
 ### Verdict
 
-**Fix before merging — Important issues (4), Suggestions (5).**
+**Fix before merging — Important issues (3), Suggestions (6).**
 
-The PR1 test suite is well-structured: real fixtures against real DTO shapes, a properly designed fake adapter, mocktail used correctly for the service mock, `callCount` assertions throughout the interceptor tests, and meaningful `DioExceptionType`-to-Failure subtype assertions in `error_mapper_test.dart`. Coverage is reported at 100% and the passing test suite reflects genuine behavioral coverage, not just line hits.
+The PR2 test suite is structurally sound. The in-memory Drift setup is correct, the tearDown is properly async, the search tests cover all specified RN-06/07 requirements meaningfully, and the `normalizeName`/`typeWeaknessMask` tests achieve genuine 100% line coverage with non-tautological assertions. The use of the listener+pumpEventQueue pattern for the reactive stream test is strictly better than the plan's suggested `emitsInOrder`.
 
-The four Important issues do not represent correctness bugs in the current code — they are test gaps that would fail to catch specific future regressions: interceptor reordering in `dio_client.dart`, silent deserialization bugs on `baseStat`/`halfDamageFrom`, and uncovered method paths in the remote data source. These gaps are acceptable to carry into PR3 only if tracked, but they should be closed before the epic merges.
+The three Important issues all involve SQL predicate correctness that the current tests cannot catch: an off-by-one at the height category boundary, missing row-identity verification on the reactive emission, and untested OR-union semantics for a multi-element type filter set. None of these are paper coverage gaps — each represents a real class of regression that a passing suite would not surface today.
 
-The Suggestions are all low-effort improvements (one or two `expect` calls each) that increase long-term resilience without changing the test structure.
+The six Suggestions are low-effort (one or two `expect` calls each) and together would bring filter-dimension combination coverage and encoding edge-case coverage to a level appropriate for a cache layer that PR3 depends on for correctness.

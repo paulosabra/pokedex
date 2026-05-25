@@ -47,5 +47,6 @@ app.*.map.json
 # Generated code (regenerate with `dart run build_runner build`)
 *.g.dart
 *.freezed.dart
+*.drift.dart
 *.mocks.dart
 *.config.dart

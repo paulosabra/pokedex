@@ -1,7 +1,7 @@
 ---
-title: "Code Simplicity / YAGNI Review — PR1 (feature/data-part1)"
+title: "Code Simplicity / YAGNI Review — PR2 (feature/data-part2)"
 date: 2026-05-25
-scope: "lib/core/network/**, lib/features/pokemon/data/dtos/*.dart, lib/features/pokemon/data/services/poke_api_service.dart, lib/features/pokemon/data/datasources/pokemon_remote_data_source.dart, lib/core/error/failure.dart, build.yaml, pubspec.yaml, test/** for the above"
+scope: "lib/core/database/{app_database,cache_policy}.dart, lib/features/pokemon/domain/entities/{sort_criteria,pokemon_filter}.dart, lib/features/pokemon/data/summary_encoding.dart, lib/features/pokemon/data/datasources/{pokemon_local_data_source,pokemon_dao}.dart, test/features/pokemon/**"
 reviewer: claude-sonnet-4-6 (simplicity agent)
 ---
 
@@ -9,172 +9,157 @@ reviewer: claude-sonnet-4-6 (simplicity agent)
 
 ### Core Purpose
 
-Establish the remote network stack: a configured Dio client, three hand-rolled interceptors
-(rate-limit, retry, logging), a Retrofit service that maps six PokéAPI endpoints to typed return
-values, Freezed DTOs that faithfully represent the wire format, a thin data source that wraps the
-service and translates transport errors into typed `Failure` values, and `failure.dart` as the
-app-wide error vocabulary.
+PR2 delivers the local/cache stack for the Pokémon data layer: a Drift SQLite database with four
+cache tables, a DAO implementing the offline search/filter/sort/watch query, and two domain value
+objects (`SortCriteria`, `PokemonFilter`) that the DAO consumes. It must be completable without PR1
+or PR3 and must not introduce any speculative generality.
 
 ---
 
-### Critical
+### Unnecessary Complexity Found
 
-None.
+**1. `pokemon_filter_test.dart` — Freezed contract tests duplicate generated guarantees**
 
----
+`test/features/pokemon/domain/entities/pokemon_filter_test.dart` (lines 15–36) contains three tests:
 
-### Important
+- `'value equality holds for identical filters'` — asserts `==` and `hashCode`. Freezed generates
+  both; this test verifies the code generator, not application logic.
+- `'copyWith overrides selected fields only'` — asserts the generated `copyWith`. Same: this is
+  Freezed's contract.
+- `'defaults to empty type/weakness sets and no height'` — this one tests a concrete design
+  decision (the `@Default` values) and is genuinely useful.
 
-#### 1. `poke_api_service.dart:16` and `dio_client.dart:7` — `baseUrl` is declared in two places; one is dead
+The generated-contract tests add no confidence in application behavior and will never catch a
+regression (they would only fail if Freezed itself regressed). At 100-line scale they are noise;
+at larger scale they multiply maintenance cost.
 
-- **Files:** `lib/features/pokemon/data/services/poke_api_service.dart:16`,
-  `lib/core/network/dio_client.dart:7` (and `dio_client.dart:23`)
-- **Issue:** `pokeApiBaseUrl` is set both on the `Dio` options in `createPokeApiDio` and in
-  `@RestApi(baseUrl: 'https://pokeapi.co/api/v2/')`. The generated `_PokeApiService` constructor
-  assigns `baseUrl ??= 'https://pokeapi.co/api/v2/'` and then calls
-  `_combineBaseUrls(_dio.options.baseUrl, baseUrl)`. Because the Retrofit `baseUrl` field is
-  always non-null after construction and the parsed URI is absolute, `_combineBaseUrls` always
-  returns the `@RestApi` URL — the Dio `baseUrl` in `BaseOptions` is never consulted for any
-  request routed through `PokeApiService`. The `pokeApiBaseUrl` constant is only exercised by the
-  `dio_client_test.dart` assertion `expect(dio.options.baseUrl, pokeApiBaseUrl)`, which therefore
-  tests a property that has no effect on production requests.
-- **Impact:** two canonical sources for the same string, subtle misleading symmetry. If one is
-  changed without the other the application silently continues to work (whichever the Retrofit
-  service uses wins), making the mismatch hard to notice.
-- **Suggested fix:** Remove `baseUrl` from `@RestApi(baseUrl: ...)` and leave it on the
-  `Dio` options only. The Retrofit factory already accepts an optional `baseUrl` override
-  (`factory PokeApiService(Dio dio, {String? baseUrl}) = _PokeApiService`); without the
-  annotation default the constructor's `baseUrl ??=` fallback becomes `null` and
-  `_combineBaseUrls` returns `dioBaseUrl` — the correct value from `createPokeApiDio`. This
-  collapses to a single declaration.
-- **Alternative:** keep `@RestApi` as-is but remove `baseUrl: pokeApiBaseUrl` from
-  `BaseOptions` in `createPokeApiDio` (since it is never consulted), and update the
-  `dio_client_test` to not assert `baseUrl`. This avoids touching the generated code.
-- **Estimated saving:** 1 declaration + the misleading symmetry; test line adjustment is
-  net-neutral.
+**2. `summary_encoding_test.dart` — third assertion in `typeWeaknessMask` is partially tautological**
 
-#### 2. `pokemon_remote_data_source_test.dart` — two of six endpoints have no success-path test
+`test/features/pokemon/data/summary_encoding_test.dart`, lines 38–41 (the `'multiple types OR
+their bits together'` test):
 
-- **File:**
-  `test/features/pokemon/data/datasources/pokemon_remote_data_source_test.dart`
-- **Issue:** The success group covers `fetchPage`, `fetchPokemon`, `fetchEvolutionChain`, and
-  `fetchEncounters` (four of six methods). `fetchSpecies` and `fetchType` appear only in error
-  paths (`fetchSpecies` maps a 5xx → `ServerFailure`; `fetchType` maps a connection error →
-  `NetworkFailure`). The `_guard` helper is the only logic the data source owns; both missing
-  methods exercise exactly the same `_guard` path as the four covered methods, so 100 % line
-  coverage is achieved without them. However, the success assertions serve as a specification:
-  they document which DTO type each method returns and verify the pass-through. Their absence
-  means a future refactor that accidentally swaps `getSpecies`/`getType` inside `_guard` would
-  go undetected.
-- **Suggested fix:** Add two success tests (one for `fetchSpecies`, one for `fetchType`) to
-  the existing `'PokemonRemoteDataSource success'` group following the existing pattern. This
-  adds ~10 lines but eliminates the asymmetry and strengthens the specification value of the
-  test suite.
-- **Impact:** no LOC reduction; the omission is a gap in test completeness, not excess code.
+```dart
+expect(mask & typeWeaknessMask({PokemonTypeId.grass}), isNonZero);
+expect(mask & typeWeaknessMask({PokemonTypeId.fire}), isNonZero);
+expect(mask & typeWeaknessMask({PokemonTypeId.water}), 0);
+```
 
-#### 3. `test/fixtures/` — five fixture files are never loaded by any test
+The first two sub-assertions are proven by the prior line `expect(mask, 1 | 4)`. If `mask == 5`
+(which has already been asserted), then `mask & 1 != 0` and `mask & 4 != 0` are arithmetic
+identities — they cannot fail unless the first `expect` also fails. They add no incremental
+coverage. The third sub-assertion (`water == 0`) is independently useful and should be kept.
 
-- **Directory:** `test/fixtures/`
-- **Issue:** Five JSON fixtures exist on disk but are not referenced by any `*.dart` test
-  file: `encounters_bulbasaur.json`, `pokemon_eevee.json`, `species_eevee.json`,
-  `type_electric.json`, `type_poison.json`. `fixtureJson`/`fixtureJsonArray` calls in all
-  test files were audited; none of these five filenames appear.
-- **Why this matters:** dead fixture files carry two costs — they mislead a reader into thinking
-  there is a test that uses them, and they will need updating when the real API shapes change.
-- **Suggested fix:** Delete the five files. If they were prepared for future tests (PR2/PR3),
-  they should be committed alongside the tests that use them.
-- **Estimated LOC reduction:** 5 JSON files; no Dart LOC impact, but reduces fixture
-  maintenance surface.
+**3. `app_database.dart` — `migration` property boilerplate can be omitted**
+
+`lib/core/database/app_database.dart`, lines 110–111:
+
+```dart
+@override
+MigrationStrategy get migration =>
+    MigrationStrategy(onCreate: (m) => m.createAll());
+```
+
+`MigrationStrategy(onCreate: (m) => m.createAll())` is Drift's own default when no custom migration
+is provided on a fresh schema. Overriding it explicitly with the identical default value adds three
+lines that could mislead a reader into thinking a custom decision was made here.
+
+**Note:** This is a borderline call — keeping it is defensible as an explicit "yes, we checked this
+deliberately" signal, and it harms nothing. Flagged as a suggestion only.
+
+**4. `pokemon_dao_test.dart` — `detail / evolution / type relations round-trip` test (lines 102–129) packs three independent concerns into one test**
+
+The single test `'detail / evolution / type relations round-trip'` upserts a detail, an evolution
+chain, and a type relation in one `test()` block, then asserts all three read-backs plus one
+null-miss. This is not a simplicity violation per se, but it mixes failure locality: if
+`upsertDetail` fails, the evolution and type assertions never run, and the error message does not
+name the failing concern. Splitting into three focused tests would cost ~15 lines and sharpen
+failure messages. This is a suggestion, not a blocker.
 
 ---
 
-### Suggestions
+### Code to Remove
 
-#### 4. `rate_limit_interceptor_test.dart:96-110` — `_expectImmediateRetry` extracted as top-level function but called exactly once
+| Location | Reason | Estimated LOC |
+|---|---|---|
+| `test/…/pokemon_filter_test.dart` lines 15–36 | Two tests verify Freezed's own generated contract (`==`, `hashCode`, `copyWith`), not application logic | ~22 LOC |
+| `test/…/summary_encoding_test.dart` lines 38–40 | Two sub-assertions inside `'multiple types OR…'` are arithmetic identities given the immediately preceding `expect(mask, 1 \| 4)` | ~2 LOC |
+| `lib/core/database/app_database.dart` lines 110–111 | Explicit override of Drift's own default `MigrationStrategy`; adds noise, removes nothing | ~3 LOC (optional) |
 
-- **File:** `test/core/network/interceptors/rate_limit_interceptor_test.dart:48,96-110`
-- **Issue:** `_expectImmediateRetry` is a 14-line top-level function called only once (line 48
-  via `return _expectImmediateRetry(wire, rateLimited)`). The extraction requires threading the
-  `wire` and `rateLimited` closures as parameters, adding indirection that exists solely to
-  satisfy a single call site. The test body inside would be clearer inlined, with a comment
-  explaining the `now()` injection.
-- **Why this is a Suggestion rather than Important:** the extraction may have been motivated by
-  a linter rule or by anticipating a second HTTP-date variation test. Neither is present.
-  Inlining is a trivial mechanical change with no semantic effect.
-- **Estimated saving:** removes the function signature + parameter threading (~6 lines of
-  scaffolding); the assertion body stays.
+Total removable: ~24 LOC (critical/important) + 3 LOC (optional suggestion).
 
-#### 5. `failure_test.dart:25-29` — `identical(a, b) isFalse` assertion tests Dart internals, not `Failure`
+---
 
-- **File:** `test/core/error/failure_test.dart:25-29`
-- **Issue:** The equality test constructs two `NetworkFailure` instances via runtime string
-  concatenation (`['off','line'].join()`) to defeat const canonicalization, then asserts
-  `identical(a, b) isFalse` before asserting `a == b`. The `identical` check is verifying that
-  Dart did not constant-fold the two instances — it is a meta-test of Dart's const interning
-  behavior, not of `Failure`'s `==` operator. The structural `==` path in `Failure` is already
-  exercised by the `equals(b)` assertion that follows; the `identical` check adds noise without
-  testing any app logic.
-- **Suggested fix:** Remove the `identical(a, b) isFalse` expectation and the associated
-  comment. The remaining `expect(a, equals(b))` and `expect(a.hashCode, equals(b.hashCode))`
-  are sufficient.
-- **Estimated saving:** 3 lines.
+### Simplification Recommendations
 
-#### 6. `rate_limit_interceptor_test.dart` — positive-seconds `Retry-After` branch is untested
+#### 1. Remove the two Freezed-contract tests from `pokemon_filter_test.dart`
 
-- **File:** `test/core/network/interceptors/rate_limit_interceptor_test.dart`
-- **Issue:** The `_retryAfter` method in `RateLimitInterceptor` has a branch
-  `seconds <= 0 ? Duration.zero : Duration(seconds: seconds)`. The only numeric test uses
-  `retryAfter: '0'`, which exercises the `Duration.zero` arm. The `Duration(seconds: seconds)`
-  arm for a positive value is never exercised by a test. In isolation this is low risk (the
-  branch is a straightforward `Duration` constructor call), but it is a code path that
-  would silently introduce an actual `await Future.delayed` in future test runs if a
-  production fixture were used with a non-zero value.
-- **Suggested fix:** Add one test case with `retryAfter: '0'` replaced by a positive value
-  (`retryAfter: '1'`) combined with `fallbackDelay: Duration.zero` so no real time is waited,
-  or alternatively rename the existing test to clarify it only covers the zero-seconds edge.
-  Alternatively, set `baseDelay` to cover this inline in an existing test.
-- **Estimated saving:** none (addition, not removal); noted for coverage completeness.
+- **Current:** Three tests; two assert `==`/`hashCode`/`copyWith` behavior generated by Freezed.
+- **Proposed:** Retain only `'defaults to empty type/weakness sets and no height'`. Drop
+  `'value equality holds for identical filters'` and `'copyWith overrides selected fields only'`.
+- **Impact:** ~22 LOC removed; test suite tests application behavior, not the code generator.
+
+#### 2. Remove the tautological sub-assertions in `typeWeaknessMask` test
+
+- **Current:** After asserting `expect(mask, 1 | 4)`, two further assertions confirm `mask & 1`
+  and `mask & 4` are non-zero — both are implied by the prior assertion.
+- **Proposed:** Keep `expect(mask, 1 | 4)` and the `water == 0` check; remove lines 38–40.
+- **Impact:** ~2 LOC removed; test reads as a single, non-redundant assertion.
+
+#### 3. (Optional) Remove the explicit `migration` override in `AppDatabase`
+
+- **Current:** Overrides `MigrationStrategy` with Drift's default value.
+- **Proposed:** Delete lines 110–111 entirely; Drift uses `MigrationStrategy(onCreate: (m) =>
+  m.createAll())` by default when no override is present.
+- **Impact:** 3 LOC removed; the class shrinks to its essential declaration.
 
 ---
 
 ### YAGNI Violations
 
-None confirmed. The following were evaluated and ruled out:
+None found. Every construct in PR2 serves a current PR2 or documented PR3 requirement:
 
-- **`_guard` helper in `PokemonRemoteDataSourceImpl`** — six identical `try/catch` call sites;
-  the extraction is the correct DRY response, not premature abstraction. Explicitly accepted
-  per scope notes.
-- **Hand-rolled retry / rate-limit interceptors** — deliberate over `dio_smart_retry`; accepted
-  per scope notes.
-- **Hand-rolled IMF-fixdate parser** — deliberate for web safety; accepted per scope notes.
-- **All DTO fields including `effort`, `baseHappiness`, `hatchCounter`** — faithfully modelling
-  the PokéAPI wire format is the stated design decision; accepted per scope notes.
-- **`CacheFailure` declared but not yet used in PR1** — `failure.dart` is the shared
-  error-vocabulary contract for the whole data layer. `CacheFailure` is needed in PR2 (local
-  data source). Pre-declaring it alongside the rest of the vocabulary is consistent with how
-  the domain-enabler contracts are handled (`PokemonRepository` interface, `PokemonEntity`).
-  Not a YAGNI violation.
-- **`abstract interface class PokemonRemoteDataSource`** — used to enable Mocktail mocking in
-  `pokemon_remote_data_source_test.dart`. Justified by the concrete test need at this PR.
-- **`@RestApi(baseUrl: ...)` annotation on `PokeApiService`** — the annotation is needed to
-  generate the `baseUrl ??= ...` fallback in `_PokeApiService`, which protects callers that
-  construct the service with a bare `Dio` (e.g. in tests). The redundancy with
-  `createPokeApiDio` is flagged under Important §1 but the annotation itself is not YAGNI.
+- `PokemonLocalDataSource` interface — DIP for repository testability in PR3 (stated in plan and
+  prompt scope notes; not speculative).
+- `summary_encoding.dart` (`normalizeName` + `typeWeaknessMask`) — consumed by the DAO now and by
+  the PR3 cache mapper; extracted for sharing, not speculation.
+- `_summaryQuery` private method — shared by `querySummaries` and `watchSummaries`, satisfying the
+  rule-of-three.
+- `HeightCategory` in `pokemon_filter.dart` — all three cases (`short`, `medium`, `tall`) map
+  directly to the `_heightPredicate` switch in `pokemon_dao.dart`; none is unused.
+- `kStaticDataTtl` alongside `kPokemonCacheTtl` — the TypeRelations rows have a documented
+  different TTL (plan §T-13); two constants are the correct encoding.
+- `AppDatabase.forTesting` named constructor — used immediately in `pokemon_dao_test.dart`.
+- `_shortMaxDecimetres` / `_tallMinDecimetres` constants in the DAO — single-use but the named
+  constant is more readable than the magic integers `10` / `20` in a height-predicate switch.
+- Web WASM assets (`sqlite3.wasm`, `drift_worker.js`) and the `_openConnection()` factory — both
+  required by T-09 acceptance (validated on a real web target). Not speculative.
+
+---
+
+### Notable strengths
+
+- The DAO is clean and un-layered: no base class, no generic repository helper, no command/query
+  objects. The `_summaryQuery` extraction is minimal and earns its keep.
+- `summary_encoding.dart` is a pure-function module with no state — trivially testable and correctly
+  scoped.
+- `cache_policy.dart` is two named constants and nothing more. Ideal.
+- `sort_criteria.dart` is a plain enum with no methods — exactly the right amount of code for a
+  value whose behavior lives in the DAO switch.
+- `AppDatabase.forTesting` is a minimal test seam; it does not introduce a factory pattern, a DI
+  abstraction, or a mock database.
+- The DAO test suite is behavior-driven: it tests search semantics (partial, case, accent, leading
+  zeros), filter semantics (intersection, zero result), sort semantics (all four orderings), and the
+  reactive stream. No test asserts internal implementation details.
 
 ---
 
 ### Final Assessment
 
-**Total potential LOC reduction:** ~10 lines of dead/redundant code (1 from collapsing the
-duplicate `baseUrl` declaration, 3 from removing the `identical` assertion in the failure test,
-5 dead fixture files). The two missing success-path tests in `pokemon_remote_data_source_test`
-represent an addition (~10 lines), not a removal.
+Total potential LOC reduction: ~2–3% of PR2 test lines (24–27 LOC of ~370 test LOC).
 
-**Complexity score:** Low. Every component has a single clear responsibility; the interceptors
-follow a uniform structure; the DTOs are flat frozen value objects; the data source is a thin
-delegation layer. No unnecessary abstractions or premature generalization was found.
+Complexity score: **Low** — this is a well-scoped PR with minimal abstraction and no premature
+generality. The source files are uniformly minimal.
 
-**Verdict:** Ready to merge. The dual `baseUrl` declaration (Important §1) is the only
-structural issue worth addressing before the provider wiring in T-17 locks in the pattern.
-The two missing success-path tests (Important §2) and the five unused fixture files
-(Important §3) are the next priority; neither blocks the PR.
+Recommended action: **Proceed with simplifications** — the two important issues (Freezed-contract
+tests and tautological assertions) are quick removals. The optional suggestion (`migration`
+override) can be left to the author's preference.

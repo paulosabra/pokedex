@@ -2,6 +2,11 @@
 ///
 /// Defined in `core/` (not `app/theme/`) so both the theme layer and the later
 /// domain layer can depend on it without inverting the layer dependency rule.
+///
+/// ⚠️ Each value's `index` is a PERSISTED contract: the data layer stores it in
+/// the SQLite cache (`primaryTypeId`/`secondaryTypeId`) and encodes it into the
+/// weakness bitmask (`1 << index`). Do NOT reorder or remove values — doing so
+/// silently corrupts every cached row. Append new types at the end only.
 enum PokemonTypeId {
   /// The Grass type.
   grass,
