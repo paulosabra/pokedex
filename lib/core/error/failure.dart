@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+import 'package:meta/meta.dart';
 
 /// Base type for all typed, recoverable errors in the app.
 ///
@@ -6,8 +6,12 @@ import 'package:flutter/foundation.dart';
 /// many-to-one — e.g. both [NetworkFailure] and [CacheFailure] surface TE-01.
 /// [message] is a short, internal tag (not user-facing); the presentation
 /// layer maps each failure to a friendly, localized message.
+///
+/// Implements [Exception] so the data layer can `throw` a mapped failure
+/// idiomatically (and satisfy `only_throw_errors`); the repository catches it
+/// and converts it back into an `Err` result.
 @immutable
-sealed class Failure {
+sealed class Failure implements Exception {
   /// Creates a [Failure] with a short internal [message].
   const Failure(this.message);
 

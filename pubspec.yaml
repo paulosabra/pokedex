@@ -8,15 +8,28 @@ environment:
   sdk: ^3.12.0
 
 dependencies:
+  connectivity_plus: ^7.1.1
+  dio: ^5.9.0
+  # drift + drift_dev are pinned exact to the analyzer-9 stable codegen line.
+  # drift_dev 2.32.0 jumps to analyzer ^10, which would drag freezed/riverpod
+  # codegen onto -dev prereleases. drift_flutter 0.2.8 transitively pins the
+  # matching sqlite3_flutter_libs/sqlite3. See pubspec.lock for the proof.
+  drift: 2.31.0
+  drift_flutter: 0.2.8
   flutter:
     sdk: flutter
   flutter_riverpod: ^3.0.0
   freezed_annotation: ^3.0.0
-  json_annotation: ^4.0.0
+  json_annotation: ^4.11.0
+  meta: ^1.16.0
+  retrofit: ^4.9.2
   riverpod_annotation: ^4.0.0
+  sqlite3_flutter_libs: ^0.5.24
 
 dev_dependencies:
   build_runner: ^2.4.0
+  # drift_dev pinned exact — see the drift note under dependencies.
+  drift_dev: 2.31.0
   flutter_test:
     sdk: flutter
   # freezed and riverpod_generator are pinned to the analyzer-9 stable codegen line.
@@ -26,6 +39,11 @@ dev_dependencies:
   freezed: 3.2.5
   json_serializable: ^6.0.0
   mocktail: ^1.0.0
+  # retrofit_generator is pinned exact to stay on the analyzer-9 stable codegen line:
+  # 10.2.6 accepts analyzer >=8.4.1 <14 + source_gen ^4, so it rides the same stable fork
+  # as freezed/riverpod_generator. A caret would risk a future re-resolve onto a build that
+  # bumps analyzer past the pinned set. See pubspec.lock for the proof.
+  retrofit_generator: 10.2.6
   riverpod_generator: 4.0.3
   very_good_analysis: ^10.0.0
 

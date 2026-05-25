@@ -1,7 +1,7 @@
 ---
-title: "Test Quality Review — PR3 (foundation-part3)"
-date: 2026-05-24
-branch: feature/foundation-part3
+title: "Test Quality Review — PR3 (data-part3)"
+date: 2026-05-25
+branch: feature/data-part3
 reviewer: Test Quality Agent (VGV)
 ---
 
@@ -9,161 +9,186 @@ reviewer: Test Quality Agent (VGV)
 
 ### Coverage Summary
 
-- Test run: **Pass** (all tests pass, coverage collected)
-- Coverage: **100% of executable lines** in `lib/app/theme/pokemon_type_theme.dart`
-  - `lib/app/theme/app_colors.dart`: const-only declarations — no instrumentable lines (not a gap)
-  - `lib/app/theme/app_typography.dart`: const-only declarations — no instrumentable lines (not a gap)
-  - `lib/app/theme/app_theme.dart`: single `static get light` getter — covered via `app_boot_test.dart`
-  - `lib/core/pokemon/pokemon_type_id.dart`: pure enum declaration — no instrumentable lines (not a gap)
-- Files with tests: **2/2 executable files**
-  - `lib/app/theme/pokemon_type_theme.dart` → `test/app/theme/pokemon_type_theme_test.dart`
-  - `lib/app/app.dart` (theme wiring) → `test/app/app_boot_test.dart`
-- Missing test files: none
+- **Test run**: Pass (all tests green)
+- **Overall project coverage**: 61.4% (1,267 / 2,064 instrumented lines) — the low total is expected because the UI epic is not yet implemented; the data layer's own numbers are what matter here
+- **Mapper coverage (T-12 surface)**: 100% line coverage on all six mapper files
+- **RepositoryImpl coverage (T-13 surface)**: 100% line coverage (113 / 113 lines)
+- **Domain entity coverage**: mixed — see gaps below
 
----
-
-### Critical
-
-None.
-
----
-
-### Important
-
-**`test/app/theme/pokemon_type_theme_test.dart:46` — derived-tint background assertion is too weak**
-
-The test for the derived-path background at line 45-46 is:
-
-```dart
-final water = PokemonTypeTheme.styleOf(PokemonTypeId.water);
-expect(water.backgroundColor, isNot(water.color));
-```
-
-This only verifies that the derived background is not identical to the badge color. It does not pin what the background color *is*. The production formula is `Color.lerp(color, const Color(0xFFFFFFFF), 0.5)!`. If the formula were accidentally changed — for example, a different lerp fraction, a different target color, or an entirely different derivation — this assertion would continue to pass as long as the result was still different from the badge color.
-
-For water, the expected derived value is computable: `Color.lerp(const Color(0xFF4A90DA), const Color(0xFFFFFFFF), 0.5)!` = `Color(0xFFA4C8ED)`. Asserting this exact value pins the formula and catches any unintended change to the derivation logic, which is the purpose of the test.
-
-This is "important" rather than "critical" because the formula is simple and stable for this phase, and it is explicitly documented as a stopgap pending T-18's Figma reconciliation. However, the plan calls for verifying "the derived-tint background path," and a non-equality check does not constitute verification of the tint — it only verifies non-identity.
-
-Fix: replace the weak `isNot` check with an exact expected value for at least one derived type:
-
-```dart
-// water badge color: Color(0xFF4A90DA)
-// derived: Color.lerp(Color(0xFF4A90DA), white, 0.5) = Color(0xFFA4C8ED)
-expect(
-  PokemonTypeTheme.styleOf(PokemonTypeId.water).backgroundColor,
-  const Color(0xFFA4C8ED),
-);
-```
-
----
-
-### Minor
-
-**`test/app/theme/pokemon_type_theme_test.dart:8-22` — widget test uses `testWidgets` unnecessarily**
-
-The RN-04 color-by-type test pumps a bare `ColoredBox` into the widget tree solely to read back the color it was constructed with:
-
-```dart
-await tester.pumpWidget(
-  ColoredBox(color: PokemonTypeTheme.styleOf(PokemonTypeId.fire).color),
-);
-final fire = tester.widget<ColoredBox>(find.byType(ColoredBox)).color;
-```
-
-`PokemonTypeTheme.styleOf` is a pure function that returns a record of `Color` values. The widget pump does not exercise any rendering pipeline, layout, or theme resolution — it merely gives a `Color` to `ColoredBox` and then reads it back from the same widget. No widget-specific behavior is being tested.
-
-This is not a correctness problem — the assertions are sound and the test does satisfy the plan's "example widget test" requirement with exact hex values. But it inflates the test surface without exercising widget rendering. A plain `test` calling `PokemonTypeTheme.styleOf` directly would be cleaner and faster. This distinction becomes material in T-18, when actual badge/card widgets should have widget tests that verify the *rendered* color.
-
-This is minor because the plan explicitly called for a widget test as evidence of color-by-type behavior (RN-04), and the test does satisfy that acceptance criterion while remaining non-tautological.
-
-**`test/app/theme/pokemon_type_theme_test.dart:30` — uniqueness test does not assert the resolved values**
-
-The all-18-unique-colors test at lines 24-32 correctly verifies uniqueness by inserting all colors into a `Set` and checking the set has 18 entries. It also confirms `PokemonTypeId.values` has 18 elements. This is a well-structured test.
-
-The minor gap: none of the 16 types not covered by the widget test at lines 8-22 have their exact badge hex asserted anywhere. The uniqueness test guarantees no two types share a color and that all 18 resolve without throwing, but a wrong hex value (e.g. two neighboring entries accidentally swapped) would produce 18 distinct values and pass. Consider spot-checking 2-3 additional types with exact hex assertions — enough to catch copy-paste errors in the color table without asserting all 18.
-
----
-
-### Suggestions
-
-**`test/app/app_boot_test.dart` — assert `theme` is the correct `AppTheme.light` identity, not just non-null with one property**
-
-The current global-theme test at lines 15-16 checks:
-
-```dart
-expect(app.theme, isNotNull);
-expect(app.theme!.scaffoldBackgroundColor, AppColors.backgroundWhite);
-```
-
-`scaffoldBackgroundColor` is a meaningful sentinel, and the assertion is not tautological. However, `scaffoldBackgroundColor` is one of the cheaper properties to get right accidentally — any `ThemeData` with default or manually set white background would satisfy it. A stronger (and still simple) assertion would verify the `fontFamily`, which is the most distinctive property of `AppTheme.light`:
-
-```dart
-expect(app.theme!.textTheme.displaySmall?.fontFamily, 'SF Pro Display');
-```
-
-This is a suggestion rather than a minor issue because `scaffoldBackgroundColor` is a legitimate and specific sentinel tied to `AppColors.backgroundWhite` (`0xFFFFFFFF`), which is already non-trivially specific. The global-theme acceptance criterion is met.
-
-**`test/app/theme/pokemon_type_theme_test.dart` — derived-background test could cover more than one derived type**
-
-Only water is used to exercise the derived-tint path. Given that the plan notes the derivation is a `Color.lerp` stopgap reconciled in T-18, testing two derived types (e.g. water and electric) with exact expected values would make the intent clearer and catch any type-keyed conditional logic that might be introduced inadvertently. Low priority for this phase.
-
----
-
-### Plan Requirement Checklist
-
-| Requirement (from plan PR3 section) | Status |
+| File | Coverage |
 |---|---|
-| `ThemeData` defined with §10.1 base colors + typography | Pass — `app_theme.dart` wired, `app_boot_test.dart:16` asserts `scaffoldBackgroundColor` |
-| `PokemonTypeTheme` covers all 18 types | Pass — `pokemon_type_theme_test.dart:24-32` exhaustively verified via uniqueness Set |
-| All 18 types resolve without throwing | Pass — same test iterates `PokemonTypeId.values` |
-| Exact §10.3 badge hex for grass (color) | Pass — `pokemon_type_theme_test.dart:19` (fire exact hex asserted) |
-| Exact §10.3 badge hex for water (color) | Pass — `pokemon_type_theme_test.dart:20` (water exact hex asserted) |
-| Exact §10.3 background for grass | Pass — `pokemon_type_theme_test.dart:36-39` exact `Color(0xFF8BBE8A)` |
-| Exact §10.3 background for fire | Pass — `pokemon_type_theme_test.dart:40-43` exact `Color(0xFFFFA756)` |
-| Derived-tint background path tested | **Partial** — non-identity checked (`isNot`), but formula not pinned with an exact value (`pokemon_type_theme_test.dart:45-46`) |
-| Color-by-type verified in widget test (RN-04) | Pass — `pokemon_type_theme_test.dart:8-22`, fire and water exact hex asserted, `isNot` confirms distinct values |
-| Theme applied globally (acceptance criterion) | Pass — `app_boot_test.dart:15-16`, `scaffoldBackgroundColor == AppColors.backgroundWhite` asserted |
+| `data/mappers/generation_ranges.dart` | 100% (11/11) |
+| `data/mappers/type_effectiveness.dart` | 100% (22/22) |
+| `data/mappers/pokemon_mapper.dart` | 100% (10/10) |
+| `data/mappers/pokemon_detail_mapper.dart` | 100% (66/66) |
+| `data/mappers/evolution_mapper.dart` | 100% (25/25) |
+| `data/mappers/cache_mapper.dart` | 100% (33/33) |
+| `data/repositories/pokemon_repository_impl.dart` | 100% (113/113) |
+| `domain/entities/location_entry.dart` | **0% (0/2)** |
+| `domain/entities/location_entry.g.dart` | **25% (2/8)** |
+
+**Missing test files**: none. Every production file in the reviewed scope has a corresponding test file.
 
 ---
 
-### State Management Test Quality
+### Mapper Test Quality (T-12)
 
-Not applicable. No BLoC/Cubit/Riverpod providers exist in PR3. The first provider lands in T-17.
+#### generation_ranges_test.dart — Pass with suggestions
 
-### UI Component Test Quality
+The test covers end-of-generation boundary values and both out-of-range sentinels, and it correctly caught a real `generationForId(0)` bug during development. The `kUnknownGenerationId == 0` assertion is borderline (testing a constant rather than behavior) but it functions as a cross-layer contract test given the DAO depends on the numeric value 0 being "unknown."
 
-The RN-04 widget test at `test/app/theme/pokemon_type_theme_test.dart:8-22` pumps a `ColoredBox` with exact type-resolved colors and asserts the resolved hex values. It satisfies the plan's "example widget test" requirement. See the Minor note above regarding the use of `testWidgets` for a pure-function result.
+**Gap — start-of-generation boundaries for gens 3–8 are not tested.** The test verifies `152` (Gen 2 start) and `906` (Gen 9 start) but skips `252`, `387`, `494`, `650`, `722`, and `810`. An off-by-one error that shifted the `<= 251` guard to `<= 252` would return `2` for id `252` instead of `3`, and the current suite would not catch it. With 100% line coverage this cannot cause a hidden regression today, but the gap makes the boundary contract weaker than it should be for a "highest-bug-risk surface."
 
-The global-theme test at `test/app/app_boot_test.dart` pumps `PokedexApp` and asserts `MaterialApp` presence and `scaffoldBackgroundColor`. This is appropriate and non-tautological.
+#### type_effectiveness_test.dart — Pass
+
+Strong fixture-backed setup with real API JSON for Grass, Poison, Ground, and Electric types. All four RN-10 calculation paths are explicitly asserted:
+
+- Single-type 2x and 0.5x
+- Dual-type Grass/Poison 2x, 0.25x, and neutral-cancellation (key business rule)
+- Dual-type Grass/Ground 4x accumulation (RN-10)
+- Dual-type Grass/Ground 0x immunity (RN-10)
+- Empty relation map degrading to neutral (TE-10)
+
+The `weaknessMask` is verified against `typeWeaknessMask(effect.weaknesses)` — this is a legitimate structural check, not a tautology, because it confirms the mask field is kept in sync with the weaknesses list.
+
+No issues found.
+
+#### pokemon_mapper_test.dart — Pass
+
+Tests cover: dual-type ordering by slot, single-type, empty sprite fallback, and unknown type name filtering (TE-10). Real fixtures are used for the two main cases. The test file is concise and all assertions are behavioral.
+
+No issues found.
+
+#### pokemon_detail_mapper_test.dart — Pass
+
+Covers a comprehensive set of the detail mapping contract:
+
+- Scalar fields, height, weight, genus from real Bulbasaur fixtures
+- Flavor text sanitization: verifies `\n` and `\f` removal and double-space collapse (RN-07)
+- Abilities with hidden flag
+- Gender percentages at rate 1 (12.5% female) and rate -1 (Ditto, genderless) — RN-11
+- Level-100 min/max stat formulas for HP and non-HP with documented arithmetic (RN-12)
+- Total stat sum
+- Type defense and weakness pass-through (RN-10)
+- Location mapping from encounter fixture (RF-34)
+- Full null-species degradation (TE-10)
+
+The stat formula assertions include inline comments that document the expected arithmetic, which is exemplary.
+
+**Minor gap**: there is no test for a species present but containing no English flavor text entries. The `_englishFlavorText` function has `english.isEmpty ? '' : ...` — this branch is distinct from `species == null` (which is tested) but is never exercised.
+
+**Minor gap**: `gender_rate` boundary values `0` (100% male) and `8` (100% female) are not tested. The formula `rate / 8 * 100` is simple and covered at `rate = 1`, but the zero-result and full-result cases have not been explicitly pinned.
+
+**Minor gap**: `evYield` is tested for a single-stat EV yield (`1 Sp. Atk`). A multi-stat case (e.g., `1 Attack, 1 Speed`) is not tested; the join logic in `_evYield` has a code path for multiple contributing stats.
+
+#### evolution_mapper_test.dart — Important issue
+
+**The 100% line coverage figure masks insufficient behavioral assertions on the Eevee test.**
+
+The Eevee branching test (line 31) only asserts:
+1. `chain.root.stage.name == 'eevee'`
+2. `chain.root.evolvesTo.length == 8`
+3. `vaporeon.stage.condition == 'Use water stone'`
+
+The Eevee fixture exercises all five remaining condition branches in `_conditionFrom` — `minHappiness` (Espeon and Umbreon), `timeOfDay` (Espeon day, Umbreon night), and `location` (Leafeon, Glaceon) — but none of these output strings are asserted. The three branches that produce `'High friendship'`, `'During day'`/`'During night'`, and `'At eterna-forest'` run silently, with their output discarded. A bug that corrupted those condition strings would not be detected by the current test.
+
+The dedicated constructor test (lines 45–85) correctly adds `heldItem` and `knownMove` coverage via a synthetic DTO, which is the right pattern. But the Eevee fixture test should be extended to spot-check at minimum one node from each of the three remaining condition families.
+
+**Pattern note**: the Eevee branching test verifies structural completeness (count) and one representative value. This is a good starting point but, for a surface designated T-12 (highest-bug-risk), every output path of the condition mapper should have an assertion. The test as written provides false confidence: it would still pass if `minHappiness` produced `null` or if `timeOfDay` produced a garbled string.
+
+#### cache_mapper_test.dart — Pass with minor gap
+
+All four cache entity types have explicit round-trip tests (summary, detail, evolution, type-relations). The `summaryToCompanion` companion test verifies each derived SQL column individually, not just the JSON blob. The `pokemonFromRow` round-trip confirms the entity survives encode/decode unchanged.
+
+**Minor gap**: all tests use Bulbasaur (dual-type: Grass/Poison). The `summaryToCompanion` function sets `secondaryTypeId: Value(null)` for single-type Pokémon, and the `summaryToCompanion` companion test never exercises this branch. A Pikachu (single-type Electric) fixture is available and could close this with a two-line companion test.
+
+**Minor gap**: the detail round-trip always uses `encounters: const []`. The `LocationEntry.fromJson` factory is therefore never called in the entire test suite (confirmed by 0% coverage on `location_entry.dart`). The cache_mapper round-trip should use the `encounters_bulbasaur.json` fixture to exercise location deserialization from the JSON cache layer.
+
+---
+
+### Repository Implementation Test Quality (T-13)
+
+#### pokemon_repository_impl_test.dart — Pass with important gaps
+
+**Architecture**: the test correctly uses a real in-memory Drift database (`NativeDatabase.memory()`) as the local source and Mocktail mocks for the remote and connectivity. This is the right approach — it exercises the actual DAO query behavior and catches real SQL/ORM issues while isolating network calls. The injected clock and helper functions (`nowMs`, `daysAgo`) make TTL tests deterministic. Fixture files are used for all remote DTO data.
+
+**Decision machine coverage for `getPokemonDetail`**:
+
+| Branch | Tested |
+|---|---|
+| Cold miss, online → compose, cache, return | Yes |
+| Cold miss, offline → NetworkFailure | Yes |
+| Mandatory `/pokemon` fails → propagate failure | Yes |
+| Fresh cache, online → return cached, background revalidate | Yes |
+| Stale cache, network success → return fresh | Yes |
+| Stale cache, network failure → serve stale (TE-02) | Yes |
+| Corrupt cache, online → treat as miss, recompose | Yes |
+| Corrupt cache, offline → CacheFailure | Yes |
+| Partial compose (species fails) → return degraded, not cached | Yes |
+| Partial compose (type + encounters fail) → return degraded, not cached | Yes |
+| Type cache reuse (fresh cached relations) → no remote type fetch | Yes |
+
+The stale+failure test (TE-02) verifies the stale value is the exact sentinel `'STALE'`, not merely "non-empty." This is a meaningful assertion.
+
+**Issue — fresh cache background revalidate test uses a bare type assertion.** The test at line 196 asserts `expect(result, isA<Ok<PokemonDetail>>())` and then verifies `remote.fetchPokemon` was called. It does not assert that the returned value is the original cached entity (i.e., that the background fetch did not block the return). This is the central contract of the "serve cache immediately, update in background" pattern. The assertion `expect((result as Ok).value, stateEquals(cached))` or at minimum `expect((result as Ok).value.description, isNot('STALE'))` (with a sentinel-seeded cache) would make the test authoritative.
+
+**Issue — stale evolution chain is not tested.** The evolution chain tests cover two states: cold miss (line 318) and fresh cache hit (line 337). The third state — row exists but is stale (`_isFresh` returns false) — is absent. In this case the implementation falls through to a remote fetch and updates the cache. This path includes the `upsertEvolutionChain` call that is not otherwise exercised. Given the TTL branch is already proven for `getPokemonDetail`, the risk is low, but the omission means the TTL enforcement for evolution chains is unverified.
+
+**Issue — null `chainId` branch untested.** `getEvolutionChain` has a guard `if (chainId == null) return const Err(NotFoundFailure())` (line 125). The LCOV data confirms this line is not instrumented — it was never executed across all tests because all fixtures have well-formed evolution chain URLs. A test that provides a species with a malformed or absent `evolutionChain.url` would close this.
+
+**Issue — corrupt evolution cache is not tested.** The `_tryParse` path within the fresh evolution cache branch (line 130) is hit only by the happy-path test. There is no test for a row that is fresh but has corrupt JSON, which would cause `_tryParse` to return null and fall through to a remote fetch. The analogous corrupt-cache tests exist for `getPokemonDetail` but not for `getEvolutionChain`.
+
+**`getPokemonList` coverage**: three tests cover the core paths (offline, success with `hasMore`, empty page, per-id failure). The success test verifies `items.length == 1`, `hasMore == true`, and that the DAO received the upsert — sufficient at the integration level since `pokemonFromDto` is independently unit-tested.
+
+**`search` / `filter` / `watchCachedSummaries`**:
+- Search delegates correctly and the corrupt-summary CacheFailure path is explicitly tested (line 404).
+- Filter is tested with `const PokemonFilter()` (all defaults, no active criteria). The delegation of type, weakness, and height filter parameters to the DAO is never exercised at the repository level. The DAO itself tests these in `pokemon_dao_test.dart`, so this is a boundary choice, but the composition is unverified at the repository layer.
+- `watchCachedSummaries` has one happy-path stream test. The error path (corrupt summary in the stream — which would throw `FormatException` since no error handling wraps the `.map()`) is untested.
 
 ---
 
 ### Anti-Patterns Found
 
-None detected.
+**evolution_mapper_test.dart:31–43 — Structural count without behavioral assertions**
 
-| Check | Result |
-|---|---|
-| Tautological assertion | Not present — exact hex values `Color(0xFFFD7D24)` / `Color(0xFF4A90DA)` are specific and non-trivial |
-| Mock-everything | Not applicable — no dependencies to mock |
-| Implementation mirroring | Not present — tests assert spec-defined values, not reproduced logic |
-| No assertions | Not present — all tests carry meaningful assertions |
-| Missing state tests | Not applicable — no state management |
-| Hardcoded magic values without context | Not present — hex values map directly to §10.3; test names and comments provide context |
-| Over-verification | Not present |
-| Missing async waiting after state changes | Not applicable — `ColoredBox` pump requires no async settling |
+- Issue: `expect(chain.root.evolvesTo, hasLength(8))` verifies a count but no test asserts the output of the `minHappiness`, `timeOfDay`, or `location` condition branches that the Eevee fixture exercises. Three condition branches produce return values (`'High friendship'`, `'During day'`/`'During night'`, `'At eterna-forest'`) that are silently discarded after execution.
+- Fix: Add `firstWhere` look-ups for Espeon, Umbreon, and Leafeon and assert their `stage.condition` values, matching the pattern already used for Vaporeon.
+
+**pokemon_repository_impl_test.dart:196–206 — Bare type assertion on the most important cache contract**
+
+- Issue: `expect(result, isA<Ok<PokemonDetail>>())` does not confirm the returned value is the cache snapshot. The core promise of the fresh-cache branch is "caller receives the old value immediately while revalidation proceeds in the background." A bare type check would pass even if the implementation inadvertently awaited the revalidation.
+- Fix: Seed the cache with a sentinel description (as the stale tests do) and assert `expect((result as Ok<PokemonDetail>).value.description, equals(seededDetail.description))`.
 
 ---
 
 ### Recommendations
 
-1. **Pin the derived-tint formula with an exact expected value.** The `isNot(water.color)` check at `pokemon_type_theme_test.dart:46` does not verify what the background color *is*, only what it is not. Replace with `expect(..., const Color(0xFFA4C8ED))` (the computed lerp result for water) to make the test catch any unintended formula change. This is the only substantive gap between the plan's stated verification scope and what the tests actually assert.
+1. **Extend the Eevee branching test** to assert Espeon's condition (`'High friendship'`), Umbreon's condition (`'During night'` or `'During day'`), and Leafeon's condition (`'At eterna-forest'`). The Vaporeon look-up pattern at line 39 is the right template. This closes the most significant assertion gap for T-12.
 
-2. **All other plan requirements are fully met.** Both test files exist, both critical acceptance criteria (color-by-type widget test, global theme applied) are asserted with specific values, all 18 types are exhaustively covered for uniqueness and non-throw behavior, and the two spec-exact backgrounds (grass/fire) are pinned with exact hex values. The tests are idiomatic, well-grouped, and free of the anti-patterns listed above.
+2. **Add a location cache deserialization test** — change the `detail cache round-trips through payloadJson` test in `cache_mapper_test.dart` to use `encounters_bulbasaur.json` (already available as a fixture) so that `LocationEntry.fromJson` is exercised. This closes the 0% gap on `location_entry.dart`.
+
+3. **Add a stale evolution chain test** — seed the chain with `updatedAt: daysAgo(8)`, stub `remote.fetchEvolutionChain` to return the DTO, and assert the result is `Ok` and that `verifyNever` on the remote fetch is no longer satisfied. This closes the missing TTL branch and the `upsertEvolutionChain` path in `getEvolutionChain`.
+
+4. **Add a null `chainId` test** — stub `remote.fetchSpecies` to return a `PokemonSpeciesDto` with an empty or malformed `evolutionChain.url` and assert `NotFoundFailure`.
+
+5. **Strengthen the fresh cache revalidation test** — seed the cache with a distinguishable sentinel description and assert the returned value matches the cached entity, not the revalidated one, to make the "serve immediately" contract explicit.
+
+6. **Add generation boundary assertions for gens 3–8** — test `generationForId(252)` through `generationForId(810)` at the first ID of each generation to guard against off-by-one regressions at the 251, 386, 493, 649, 721, and 809 boundaries.
+
+7. **Add a single-type summary companion test** — call `summaryToCompanion` with a Pikachu (single-type, `types.length == 1`) and assert `companion.secondaryTypeId.value == null`.
 
 ---
 
 ### Verdict
 
-Ready to merge after strengthening the derived-tint background assertion at `pokemon_type_theme_test.dart:46` from a weak `isNot` check to an exact expected `Color` value — one important gap; all other plan requirements are satisfied and test quality is otherwise high.
+**Fix 5 issues before merging.**
+
+The test suite is well-structured, uses real fixtures and a real in-memory database for the repository, and achieves its stated 100% line coverage targets. Most mapper logic is thoroughly verified. However, five issues need to be addressed:
+
+1. The Eevee branching test exercises three condition branches (`minHappiness`, `timeOfDay`, `location`) without asserting their output — false confidence on the highest-bug-risk surface.
+2. `LocationEntry.fromJson` is at 0% coverage because the detail cache round-trip uses empty encounters.
+3. The stale evolution chain branch is untested.
+4. The null `chainId` guard in `getEvolutionChain` is never triggered.
+5. The fresh cache background-revalidation test uses a bare `isA<Ok>` assertion that does not verify the "serve cache immediately" contract.
+
+Items 3–5 require small additions; items 1–2 require fixture changes. None require structural refactoring. The three "minor gap" findings in the recommendations section are suggestions rather than blockers.
