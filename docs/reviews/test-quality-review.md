@@ -1,7 +1,7 @@
 ---
-title: "Test Quality Review — PR2 (foundation-part2)"
+title: "Test Quality Review — PR3 (foundation-part3)"
 date: 2026-05-24
-branch: feature/foundation-part2
+branch: feature/foundation-part3
 reviewer: Test Quality Agent (VGV)
 ---
 
@@ -9,13 +9,15 @@ reviewer: Test Quality Agent (VGV)
 
 ### Coverage Summary
 
-- Test run: **Pass** (coverage confirmed at 100% per task context)
-- Coverage: **100% line coverage** of `lib/core/error/`
-  - `lib/core/error/failure.dart`: 14/14 lines hit
-  - `lib/core/error/result.dart`: 3/3 lines hit
-- Files with tests: **2/2**
-  - `lib/core/error/failure.dart` → `test/core/error/failure_test.dart`
-  - `lib/core/error/result.dart` → `test/core/error/result_test.dart`
+- Test run: **Pass** (all tests pass, coverage collected)
+- Coverage: **100% of executable lines** in `lib/app/theme/pokemon_type_theme.dart`
+  - `lib/app/theme/app_colors.dart`: const-only declarations — no instrumentable lines (not a gap)
+  - `lib/app/theme/app_typography.dart`: const-only declarations — no instrumentable lines (not a gap)
+  - `lib/app/theme/app_theme.dart`: single `static get light` getter — covered via `app_boot_test.dart`
+  - `lib/core/pokemon/pokemon_type_id.dart`: pure enum declaration — no instrumentable lines (not a gap)
+- Files with tests: **2/2 executable files**
+  - `lib/app/theme/pokemon_type_theme.dart` → `test/app/theme/pokemon_type_theme_test.dart`
+  - `lib/app/app.dart` (theme wiring) → `test/app/app_boot_test.dart`
 - Missing test files: none
 
 ---
@@ -28,92 +30,112 @@ None.
 
 ### Important
 
-**`test/core/error/failure_test.dart:21-27` — Structural equality path never exercised by the "equal" case**
+**`test/app/theme/pokemon_type_theme_test.dart:46` — derived-tint background assertion is too weak**
 
-The equality test uses two `const` instances of the same type:
-
-```dart
-const a = ServerFailure();
-const b = ServerFailure();
-expect(a, b);
-```
-
-Dart canonicalizes compile-time constants: `a` and `b` are the *identical* object in memory. The hand-rolled `==` operator short-circuits on `identical(this, other)` before reaching the structural comparison (`runtimeType == other.runtimeType && message == other.message`). As a result, the structural equality branch — the part of `==` that is actually hand-written and therefore error-prone — is never exercised by any test case that expects the result to be `true`.
-
-The inequality tests at `failure_test.dart:29-36` do partially exercise the structural path (they reach the `other is Failure` check and then fail on message or type), but no test confirms that the structural branch correctly returns `true` for two non-identical, structurally-equal instances. A bug in that branch — for example, `||` changed to `&&`, or `runtimeType ==` dropped — would be invisible to the current suite.
-
-Fix: add one equality test using non-const-identical instances. The simplest approach is to construct two instances from a runtime value so Dart cannot canonicalize them, or use factory constructors:
+The test for the derived-path background at line 45-46 is:
 
 ```dart
-test('equal instances constructed independently share value equality', () {
-  final message = 'test-${DateTime.now().microsecondsSinceEpoch}';
-  final a = NetworkFailure(message);
-  final b = NetworkFailure(message);
-  // a and b are not identical — structural path is exercised
-  expect(identical(a, b), isFalse);
-  expect(a, b);
-  expect(a.hashCode, b.hashCode);
-});
+final water = PokemonTypeTheme.styleOf(PokemonTypeId.water);
+expect(water.backgroundColor, isNot(water.color));
 ```
 
-This is the one gap between reported line coverage and semantic coverage of the equality contract.
+This only verifies that the derived background is not identical to the badge color. It does not pin what the background color *is*. The production formula is `Color.lerp(color, const Color(0xFFFFFFFF), 0.5)!`. If the formula were accidentally changed — for example, a different lerp fraction, a different target color, or an entirely different derivation — this assertion would continue to pass as long as the result was still different from the badge color.
+
+For water, the expected derived value is computable: `Color.lerp(const Color(0xFF4A90DA), const Color(0xFFFFFFFF), 0.5)!` = `Color(0xFFA4C8ED)`. Asserting this exact value pins the formula and catches any unintended change to the derivation logic, which is the purpose of the test.
+
+This is "important" rather than "critical" because the formula is simple and stable for this phase, and it is explicitly documented as a stopgap pending T-18's Figma reconciliation. However, the plan calls for verifying "the derived-tint background path," and a non-equality check does not constitute verification of the tint — it only verifies non-identity.
+
+Fix: replace the weak `isNot` check with an exact expected value for at least one derived type:
+
+```dart
+// water badge color: Color(0xFF4A90DA)
+// derived: Color.lerp(Color(0xFF4A90DA), white, 0.5) = Color(0xFFA4C8ED)
+expect(
+  PokemonTypeTheme.styleOf(PokemonTypeId.water).backgroundColor,
+  const Color(0xFFA4C8ED),
+);
+```
 
 ---
 
 ### Minor
 
-None.
+**`test/app/theme/pokemon_type_theme_test.dart:8-22` — widget test uses `testWidgets` unnecessarily**
+
+The RN-04 color-by-type test pumps a bare `ColoredBox` into the widget tree solely to read back the color it was constructed with:
+
+```dart
+await tester.pumpWidget(
+  ColoredBox(color: PokemonTypeTheme.styleOf(PokemonTypeId.fire).color),
+);
+final fire = tester.widget<ColoredBox>(find.byType(ColoredBox)).color;
+```
+
+`PokemonTypeTheme.styleOf` is a pure function that returns a record of `Color` values. The widget pump does not exercise any rendering pipeline, layout, or theme resolution — it merely gives a `Color` to `ColoredBox` and then reads it back from the same widget. No widget-specific behavior is being tested.
+
+This is not a correctness problem — the assertions are sound and the test does satisfy the plan's "example widget test" requirement with exact hex values. But it inflates the test surface without exercising widget rendering. A plain `test` calling `PokemonTypeTheme.styleOf` directly would be cleaner and faster. This distinction becomes material in T-18, when actual badge/card widgets should have widget tests that verify the *rendered* color.
+
+This is minor because the plan explicitly called for a widget test as evidence of color-by-type behavior (RN-04), and the test does satisfy that acceptance criterion while remaining non-tautological.
+
+**`test/app/theme/pokemon_type_theme_test.dart:30` — uniqueness test does not assert the resolved values**
+
+The all-18-unique-colors test at lines 24-32 correctly verifies uniqueness by inserting all colors into a `Set` and checking the set has 18 entries. It also confirms `PokemonTypeId.values` has 18 elements. This is a well-structured test.
+
+The minor gap: none of the 16 types not covered by the widget test at lines 8-22 have their exact badge hex asserted anywhere. The uniqueness test guarantees no two types share a color and that all 18 resolve without throwing, but a wrong hex value (e.g. two neighboring entries accidentally swapped) would produce 18 distinct values and pass. Consider spot-checking 2-3 additional types with exact hex assertions — enough to catch copy-paste errors in the color table without asserting all 18.
 
 ---
 
 ### Suggestions
 
-**`test/core/error/failure_test.dart` — hashCode divergence for unequal instances not asserted**
+**`test/app/app_boot_test.dart` — assert `theme` is the correct `AppTheme.light` identity, not just non-null with one property**
 
-The test at `failure_test.dart:21-27` confirms that two equal `Failure` instances share a `hashCode`, which satisfies the contract's positive side. The hand-rolled implementation uses `Object.hash(runtimeType, message)`. While the Dart spec does not require unequal objects to have different hashes (collisions are valid), for a hand-rolled implementation with only two fields, asserting that the hashes *do* differ for the inequality cases documents intent and catches a naive bug (e.g. `hashCode => 0`). This is a suggestion, not a requirement.
+The current global-theme test at lines 15-16 checks:
 
 ```dart
-test('different type or message produce different hashCodes', () {
-  expect(
-    const NetworkFailure('x').hashCode,
-    isNot(const CacheFailure('x').hashCode),
-  );
-  expect(
-    const NetworkFailure('a').hashCode,
-    isNot(const NetworkFailure('b').hashCode),
-  );
-});
+expect(app.theme, isNotNull);
+expect(app.theme!.scaffoldBackgroundColor, AppColors.backgroundWhite);
 ```
 
-**`test/core/error/failure_test.dart:16-18` — Custom message only tested for `NetworkFailure`**
+`scaffoldBackgroundColor` is a meaningful sentinel, and the assertion is not tautological. However, `scaffoldBackgroundColor` is one of the cheaper properties to get right accidentally — any `ThemeData` with default or manually set white background would satisfy it. A stronger (and still simple) assertion would verify the `fontFamily`, which is the most distinctive property of `AppTheme.light`:
 
-Only one subtype is exercised with a custom message. All 7 subtypes share the same `([super.message = '<default>'])` constructor pattern, so this is not a critical gap — the path is covered. However, a brief parametric check across all subtypes (or at least one more subtype) would make the test suite self-documenting: a future reader can confirm that the optional-message pattern compiles and behaves correctly for each type, not just the one used as an example. Low priority given the shared constructor delegate.
+```dart
+expect(app.theme!.textTheme.displaySmall?.fontFamily, 'SF Pro Display');
+```
+
+This is a suggestion rather than a minor issue because `scaffoldBackgroundColor` is a legitimate and specific sentinel tied to `AppColors.backgroundWhite` (`0xFFFFFFFF`), which is already non-trivially specific. The global-theme acceptance criterion is met.
+
+**`test/app/theme/pokemon_type_theme_test.dart` — derived-background test could cover more than one derived type**
+
+Only water is used to exercise the derived-tint path. Given that the plan notes the derivation is a `Color.lerp` stopgap reconciled in T-18, testing two derived types (e.g. water and electric) with exact expected values would make the intent clearer and catch any type-keyed conditional logic that might be introduced inadvertently. Low priority for this phase.
 
 ---
 
 ### Plan Requirement Checklist
 
-| Requirement (from plan PR2 section) | Status |
+| Requirement (from plan PR3 section) | Status |
 |---|---|
-| Construction of `Ok` and `Err` tested | Pass — `result_test.dart:7-19` |
-| `Ok`/`Err` exhaustive switch (pattern-match) tested | Pass — `result_test.dart:22-30` |
-| `Failure` equality of identical instances tested | Pass — `failure_test.dart:21-27` |
-| Inequality: same type, different message | Pass — `failure_test.dart:29-31` |
-| Inequality: different type, same message | Pass — `failure_test.dart:33-36` |
-| Default message for all 7 subtypes asserted | Pass — `failure_test.dart:6-13` |
-| `hashCode` consistency tested | Pass — `failure_test.dart:26` |
-| `~100% line coverage` of `core/error/` | Pass — 100% confirmed |
-| Structural equality path exercised under positive case | **Gap** — const canonicalization means `identical()` short-circuits; structural branch untested for `true` return |
+| `ThemeData` defined with §10.1 base colors + typography | Pass — `app_theme.dart` wired, `app_boot_test.dart:16` asserts `scaffoldBackgroundColor` |
+| `PokemonTypeTheme` covers all 18 types | Pass — `pokemon_type_theme_test.dart:24-32` exhaustively verified via uniqueness Set |
+| All 18 types resolve without throwing | Pass — same test iterates `PokemonTypeId.values` |
+| Exact §10.3 badge hex for grass (color) | Pass — `pokemon_type_theme_test.dart:19` (fire exact hex asserted) |
+| Exact §10.3 badge hex for water (color) | Pass — `pokemon_type_theme_test.dart:20` (water exact hex asserted) |
+| Exact §10.3 background for grass | Pass — `pokemon_type_theme_test.dart:36-39` exact `Color(0xFF8BBE8A)` |
+| Exact §10.3 background for fire | Pass — `pokemon_type_theme_test.dart:40-43` exact `Color(0xFFFFA756)` |
+| Derived-tint background path tested | **Partial** — non-identity checked (`isNot`), but formula not pinned with an exact value (`pokemon_type_theme_test.dart:45-46`) |
+| Color-by-type verified in widget test (RN-04) | Pass — `pokemon_type_theme_test.dart:8-22`, fire and water exact hex asserted, `isNot` confirms distinct values |
+| Theme applied globally (acceptance criterion) | Pass — `app_boot_test.dart:15-16`, `scaffoldBackgroundColor == AppColors.backgroundWhite` asserted |
 
 ---
 
 ### State Management Test Quality
 
-Not applicable. No BLoC/Cubit/Riverpod providers exist in PR2. The first provider lands in T-17.
+Not applicable. No BLoC/Cubit/Riverpod providers exist in PR3. The first provider lands in T-17.
 
 ### UI Component Test Quality
 
-Not applicable. PR2 is pure Dart — no widgets.
+The RN-04 widget test at `test/app/theme/pokemon_type_theme_test.dart:8-22` pumps a `ColoredBox` with exact type-resolved colors and asserts the resolved hex values. It satisfies the plan's "example widget test" requirement. See the Minor note above regarding the use of `testWidgets` for a pure-function result.
+
+The global-theme test at `test/app/app_boot_test.dart` pumps `PokedexApp` and asserts `MaterialApp` presence and `scaffoldBackgroundColor`. This is appropriate and non-tautological.
 
 ---
 
@@ -123,25 +145,25 @@ None detected.
 
 | Check | Result |
 |---|---|
-| Tautological assertion (`expect(true, isTrue)` style) | Not present |
-| Mock-everything (mocking the class under test) | Not applicable — pure Dart, no dependencies to mock |
-| Implementation mirroring | Not present — the `describe` helper in `result_test.dart:23` tests pattern-match expressiveness, not internal logic |
-| No assertions | Not present — all test cases carry meaningful assertions |
+| Tautological assertion | Not present — exact hex values `Color(0xFFFD7D24)` / `Color(0xFF4A90DA)` are specific and non-trivial |
+| Mock-everything | Not applicable — no dependencies to mock |
+| Implementation mirroring | Not present — tests assert spec-defined values, not reproduced logic |
+| No assertions | Not present — all tests carry meaningful assertions |
 | Missing state tests | Not applicable — no state management |
-| Hardcoded magic values without context | Not present — `42` in `result_test.dart:8` is an unambiguous sentinel; `'offline'`, `'404'` etc. are the literal spec-defined defaults |
-| Over-verification (`verify` on every mock) | Not present |
-| Missing async waiting after state changes | Not applicable — synchronous pure-Dart tests |
+| Hardcoded magic values without context | Not present — hex values map directly to §10.3; test names and comments provide context |
+| Over-verification | Not present |
+| Missing async waiting after state changes | Not applicable — `ColoredBox` pump requires no async settling |
 
 ---
 
 ### Recommendations
 
-1. **Add a non-identical equality test to exercise the structural branch of `Failure.==`.** The const-canonicalization issue means the hand-rolled structural equality body (`runtimeType == other.runtimeType && message == other.message`) is only exercised on the *false* side (the inequality tests) and never on the *true* side from a non-identical object pair. One new test case, using a runtime-derived message string to defeat canonicalization, closes this gap without touching production code.
+1. **Pin the derived-tint formula with an exact expected value.** The `isNot(water.color)` check at `pokemon_type_theme_test.dart:46` does not verify what the background color *is*, only what it is not. Replace with `expect(..., const Color(0xFFA4C8ED))` (the computed lerp result for water) to make the test catch any unintended formula change. This is the only substantive gap between the plan's stated verification scope and what the tests actually assert.
 
-2. **All other plan requirements are fully met.** Both files have tests, all 7 default messages are asserted, both inequality axes (same-type-different-message and different-type-same-message) are covered, the exhaustive switch is demonstrated, and `hashCode` consistency is verified. The tests are clean, idiomatic `flutter_test`, and free of the anti-patterns listed above.
+2. **All other plan requirements are fully met.** Both test files exist, both critical acceptance criteria (color-by-type widget test, global theme applied) are asserted with specific values, all 18 types are exhaustively covered for uniqueness and non-throw behavior, and the two spec-exact backgrounds (grass/fire) are pinned with exact hex values. The tests are idiomatic, well-grouped, and free of the anti-patterns listed above.
 
 ---
 
 ### Verdict
 
-Ready to merge after adding one non-identical equality test (`failure_test.dart`) to close the structural-branch gap in the hand-rolled `Failure.==` — one important semantic coverage issue; all other plan requirements are satisfied and the test quality is otherwise high.
+Ready to merge after strengthening the derived-tint background assertion at `pokemon_type_theme_test.dart:46` from a weak `isNot` check to an exact expected `Color` value — one important gap; all other plan requirements are satisfied and test quality is otherwise high.

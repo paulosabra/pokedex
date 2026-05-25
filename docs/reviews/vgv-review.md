@@ -1,68 +1,79 @@
-# VGV Code Review — Foundation PR2 (T-03 · Error core)
+# VGV Code Review — Foundation PR3 (T-04 · Theme + design tokens + `PokemonTypeTheme`)
 
-- **Branch:** `feature/foundation-part2` (stacked on merged PR1) → target `epic/foundation`
-- **Scope reviewed:** `lib/core/error/failure.dart`, `lib/core/error/result.dart`, `test/core/error/failure_test.dart`, `test/core/error/result_test.dart`
-- **Source of truth:** `docs/plan/2026-05-24-chore-foundation-setup-plan.md` (PR2 — Error core section), Tech Spec §7.3/§8.1, PRD §8 (TE codes)
+- **Branch:** `feature/foundation-part3` (stacked on merged PR1 + PR2) → target `epic/foundation`
+- **Scope reviewed:** `lib/core/pokemon/pokemon_type_id.dart`, `lib/app/theme/app_colors.dart`, `lib/app/theme/app_typography.dart`, `lib/app/theme/app_theme.dart`, `lib/app/theme/pokemon_type_theme.dart`, `lib/app/app.dart`, `test/app/theme/pokemon_type_theme_test.dart`, `test/app/app_boot_test.dart`
+- **Source of truth:** `docs/plan/2026-05-24-chore-foundation-setup-plan.md` (PR3 — Theme section), Tech Spec §10.1 / §10.2 / §10.3
 - **Reviewed:** 2026-05-24
 
 ## Summary
 
-This is a clean, faithful, well-scoped implementation of the typed error core. The sealed `Failure` hierarchy and `Result<T>` re-express the Tech Spec §7.3/§8.1 sketches exactly, with the planned equality contract (`props = [runtimeType, message]`) hand-rolled correctly on the base class. Doc comments carry the PRD TE-code traceability per the plan, default messages match §7.3's terse internal tags, and `@immutable` is sourced from the already-present `flutter/foundation` rather than adding `meta`. The tests cover construction, default and overridden messages, `Ok`/`Err` exhaustive pattern-matching, and — critically — both equality and the two inequality axes (same-type/different-message, different-type/same-message). `dart analyze lib/core/error test/core/error` returns **No issues found**. All four T-03 acceptance criteria are met. The deliberate, plan-justified decisions (hand-rolled sealed classes, no `==` on `Ok`/`Err`, terse internal messages) are correctly applied and are explicitly NOT flagged below.
+A clean, faithful, well-scoped implementation of the foundation theme slice. All 18 §10.3 badge hexes are transcribed **exactly**; the two exact §10.3 backgrounds (Grass `#8BBE8A`, Fire `#FFA756`) are correct; the provisional 50%-toward-white tint for the other 16 matches the plan's pinned formula. Typography re-expresses §10.2 (sizes/weights) and is mapped into Material 3 text roles while staying directly usable. `PokemonTypeId` is correctly placed in `core/` per the documented, plan-justified deviation, and `PokemonTypeStyle` is a record with a documented T-18 migration path to a class. Token holders use VGV-idiomatic `abstract final class` with a private constructor. `dart analyze` on the changed paths returns **No errors**; the full test suite passes with coverage; the boot test was correctly strengthened to assert the global theme. All three T-04 acceptance criteria are met.
 
-**One process caveat (not a code defect):** as with PR1, the PR2 files are currently **untracked working-tree files** (`git status` shows `?? lib/core/`, `?? test/core/`; `git log epic/foundation..HEAD` shows no T-03 commit). The error-core work is invisible to git/CI until committed. Flagging for parity with the PR1 finding, but the code itself is ship-quality.
+The deliberate, plan/spec-justified decisions listed in the task brief (enum placement in `core/`, record-not-class for the style, provisional white-lerp tints for 16 types, Material-barrier-default modal opacity, per-value enum docs, typography mapped into `textTheme`) are correctly applied and are **not** flagged below.
+
+**Process caveat (not a code defect):** PR3 files are currently untracked / uncommitted working-tree changes (`git status` shows `?? lib/app/theme/`, `?? lib/core/pokemon/`, `?? test/app/theme/`, plus modified `lib/app/app.dart` and `test/app/app_boot_test.dart`; no T-04 commit on the branch). The work is invisible to git/CI until committed. Noted for parity with the PR1/PR2 reviews; the code itself is ship-quality.
 
 ## Critical — Must Fix Before Merge
 
-_None._ The code is correct, analyzer-clean, and meets every T-03 acceptance criterion.
+None.
 
 ## Important — Should Fix
 
-- **(whole PR) — The T-03 deliverables are uncommitted/untracked.**
-  - Evidence: `git status --short` shows `lib/core/` and `test/core/` as `??`; `git log --oneline epic/foundation..feature/foundation-part2` lists no `feat(core)` commit (only the inherited PR1 merge). The error-core files exist on disk but are not part of the branch.
-  - Why: A reviewer pulling the branch, and CI running against the pushed ref, would see no error core and no tests — the acceptance criteria are unmet at the git/CI level even though they pass on disk.
-  - Fix: Stage the specific paths and commit as `feat(core)` per the plan, e.g. `git add lib/core/error test/core/error && git commit -m "feat(core): add typed Result and Failure error core"`. Re-verify with `git log --oneline epic/foundation..HEAD` and `git diff --stat epic/foundation...HEAD`. (Note `lib/core/.gitkeep` is now deletable since `lib/core/error/` carries real files — stage that deletion too.)
+None blocking. The one item worth a deliberate decision before merge (Material 3 surface color) is captured under Minor below because it does not affect the foundation acceptance and has no current consumer; promote it to a tracked T-18 item rather than fixing here.
 
 ## Minor
 
-- **`test/core/error/failure_test.dart:16-18` — the custom-message override is only exercised on `NetworkFailure`.** Every subtype shares the same optional-positional-`super.message` construct, so this is sufficient for both behavior and line coverage (the override path is structurally identical across subtypes; verified `dart analyze` clean and the plan confirms 14/14 failure-file coverage). No action required — duplicating the override test across all seven subtypes would be redundant. Flagging only so the single-subtype choice is on record as intentional, not an omission.
+- **`lib/app/theme/app_theme.dart:13-15` — `ColorScheme.surface` is not the §10.1 `Background / White` (`#FFFFFF`).** `ThemeData` defaults to Material 3 (Flutter 3.44 / SDK `^3.12`), where `Scaffold`, `Card`, `BottomSheet`, `Dialog`, and `AppBar` derive their fills from `colorScheme.surface` / `surfaceContainer*`, **not** from `scaffoldBackgroundColor`. `ColorScheme.light()` ships `surface = #FFFFFBFE` (an off-white M3 tone), so sheets/cards/dialogs will not render pure §10.1 white. `scaffoldBackgroundColor` masks this for the bare `Scaffold` (and the boot test only asserts that field), but the first `showModalBottomSheet`/`Card` in the UI layer will reveal the gap.
+  - Why: §10.1 specifies `Background / White #FFFFFF` for "fundo de telas/sheets". The current theme satisfies it only for the scaffold body, not for the surfaces Material 3 actually uses for sheets/cards.
+  - Fix (when the UI layer lands, e.g. T-18): set `surface` (and the relevant `surfaceContainer*` roles) on the `ColorScheme`, e.g. `ColorScheme.light(surface: AppColors.backgroundWhite, onSurface: AppColors.textBlack)`, and consider `appBarTheme`/`bottomSheetTheme`/`cardTheme` backgrounds. Acceptable to defer, but track it explicitly so it is not silently lost.
 
-- **TE traceability lives only in doc comments, not in code.** Per the plan this is the deliberate design — the Dio→Failure→TE mapping is a T-06 concern, and modeling TE codes as fields now would be premature (YAGNI). The doc comments in `failure.dart:5-8,28-29,35,41,47,53,59,65` correctly carry the PRD mapping for traceability. Correct as-is; noting that the "each Failure maps to its TE code(s)" acceptance criterion is satisfied by documentation + the plan's mapping table, which is the agreed approach.
+- **`lib/app/theme/app_colors.dart:17,24` — `backgroundInput` and `backgroundModal` are defined but unwired (no current consumer).** Confirmed by grep: neither token is referenced outside its own declaration. This is fine for a token-definitions slice, but note that `backgroundModal`'s documented "Material barrier default (54%)" decision is currently inert — the actual scrim is whatever `showModalBottomSheet`/`ModalBarrier` uses at call time, not this constant. When sheets land, wire `backgroundInput` into an `InputDecorationTheme` and either use `backgroundModal` at the `showModalBottomSheet(barrierColor:)` call or drop the token to avoid a divergent source of truth.
+  - Why: an unused styled token that documents a specific behavioral choice can drift from the actual runtime behavior and create false confidence.
+
+- **`lib/app/theme/app_theme.dart:16` + `app_typography.dart:8` — the `'SF Pro Display'` family string is duplicated.** It is a private `_fontFamily` constant in `AppTypography` but a bare string literal in `AppTheme.light`. A future rename touches two places.
+  - Why: single-source-of-truth for tokens; the rest of this slice is exemplary about centralization.
+  - Fix: expose the family from one place (e.g. `AppTypography.fontFamily` or an `AppFonts` constant) and reference it in `ThemeData(fontFamily: ...)`.
+
+- **`pubspec.yaml:42-43` — the Semibold (weight 600) font asset is bundled but never referenced by §10.2 / `AppTypography`.** Every `AppTypography` style uses 400/500/700; 600 is declared in `fonts:` but no token requests it. PR1's stated rationale was to ship only the weights the design uses; 600 currently earns no keep in this slice.
+  - Why: a ~2.3 MB asset with no consumer contradicts the foundation's own font-trimming decision and inflates the web payload.
+  - Fix: either drop the Semibold weight until a §10/Figma token demands it, or add a tracking note that T-18 will introduce a Semibold token. (Out of strict PR3 scope since fonts landed in PR1 — flag, don't block.)
 
 ## Suggestion
 
-- **`lib/core/error/result.dart` — consider a brief class-level note that `Ok`/`Err` intentionally omit `==`.** This is a deliberate, plan-justified decision (§8.1 has no equality; tests pattern-match and read `.value`/`.failure`). A one-line `// No `==` by design — consumers pattern-match; see plan PR2.` would pre-empt a future contributor "helpfully" adding equality and diverging from the spec. Purely optional; the current doc comments are otherwise clear and complete.
+- **`lib/app/theme/app_theme.dart:13` — `static ThemeData get light` rebuilds the `ThemeData` on every access.** `ThemeData` is not const-constructible here, but `MaterialApp` reads `theme` on each build; a getter re-allocates each time. Consider a `static final ThemeData light = _build();` (or a cached late-final) so the instance is created once. Negligible at one call site today; cheap to make idiomatic before more consumers read it.
 
-- **`failure.dart:9` — `@immutable` is well-placed on the sealed base** and correctly inherited by all subtypes. No change needed; mentioned only to confirm the annotation choice (reusing `flutter/foundation` over adding `meta`) is the right call and matches the plan.
+- **`test/app/theme/pokemon_type_theme_test.dart:8-22` — the RN-04 widget test reuses `find.byType(ColoredBox)` across two `pumpWidget` calls.** This works (the second pump replaces the tree) and is correct, but a reader may briefly wonder whether two boxes coexist. A one-line comment, or distinct `Key`s, would make the intent obvious. Optional.
 
-## T-03 Acceptance Verification
+- **`test/app/theme/pokemon_type_theme_test.dart:34-47` — the derived-background assertion only checks `water` is `isNot(water.color)`.** It proves the tint differs from the badge color but not that it equals the pinned `Color.lerp(color, white, 0.5)` formula. A single positive assertion against the computed lerp value (for one type) would lock the documented formula against accidental drift before T-18 reconciles it. Optional, since the formula is explicitly provisional.
 
-Verified against the working tree (NOT committed git state — see Important):
+## Acceptance verification (T-04)
 
-- **`Result<T>` covers typed success and error:** PASS. `Ok<T>(value)` and `Err<T>(failure)` extend `sealed Result<T>`; `result_test.dart:7-20` asserts both carry their payloads and are `isA<Result<int>>`; `result_test.dart:22-30` proves exhaustive `switch` pattern-matching with no default arm (compiler-enforced exhaustiveness).
-- **Each Failure maps to its PRD TE code(s) — many-to-one, TE-01…TE-09:** PASS. All seven subtypes present with §7.3 default messages (`offline`/`timeout`/`404`/`5xx`/`429`/`parse`/`cache`); doc comments map each to its TE code(s), including the shared TE-01 (`NetworkFailure` + `CacheFailure`) and TE-01/02 on `NetworkFailure`. TE-04/05/10/11 correctly excluded as UI states.
-- **Unit tests cover construction + equality/inequality:** PASS. Default messages (`failure_test.dart:6-14`), custom override (`:16-18`), equality + hashCode parity (`:21-27`), same-type/different-message inequality (`:29-31`), different-type/same-message inequality (`:33-36`). Equality contract matches the plan's `props = [runtimeType, message]` exactly.
-- **`core/error/` reaches ~100% line coverage:** PASS (plan-verified: failure 14/14, result 3/3). `Ok.value`, `Err.failure`, the base `==`/`hashCode`, and every subtype constructor are exercised.
+- [x] **`ThemeData` with §10.1 base colors + SF Pro Display typography** — `AppTheme.light` sets `fontFamily: 'SF Pro Display'`, `scaffoldBackgroundColor` = §10.1 white, `onSurface` = §10.1 `#17171B`, and maps §10.2 styles into `textTheme`. (Caveat: `ColorScheme.surface` not white — see Minor; does not block acceptance.)
+- [x] **`PokemonTypeTheme` covers all 18 types with §10.3 colors + derived bg tints** — `_colors` has all 18 enum keys; `styleOf` force-unwraps `_colors[type]!`, so a missing key would throw (and the "18 unique colors" test guards completeness). Exact backgrounds for Grass/Fire; lerp tint for the other 16.
+- [x] **Theme applied globally; color-by-type verified in a widget test** — `app.dart:13` wires `theme: AppTheme.light`; `pokemon_type_theme_test.dart` asserts fire vs water resolve to distinct §10.3 colors (RN-04); `app_boot_test.dart` asserts the global theme is present.
 
-## Equality Correctness Audit
+### §10.3 hex transcription — verified exact (18/18)
 
-The hand-rolled contract on the base `Failure` (`failure.dart:17-25`) is correct:
-- `identical` short-circuit, then `other is Failure && runtimeType == other.runtimeType && message == other.message` — so different subtypes are never equal even with identical messages (verified `:33-36`), and same subtype with different messages is unequal (verified `:29-31`).
-- `hashCode = Object.hash(runtimeType, message)` is consistent with `==` (equal objects → equal hashes; asserted `:21-27`). No hashCode/equals contract violation.
+| Type | §10.3 | impl | Type | §10.3 | impl |
+| --- | --- | --- | --- | --- | --- |
+| grass | `62B957` | ✓ | poison | `A552CC` | ✓ |
+| fire | `FD7D24` | ✓ | water | `4A90DA` | ✓ |
+| electric | `EED535` | ✓ | bug | `8CB230` | ✓ |
+| normal | `9DA0AA` | ✓ | flying | `748FC9` | ✓ |
+| ground | `DD7748` | ✓ | fairy | `ED6EC7` | ✓ |
+| fighting | `D04164` | ✓ | psychic | `EA5D60` | ✓ |
+| rock | `BAAB82` | ✓ | ghost | `556AAE` | ✓ |
+| ice | `61CEC0` | ✓ | dragon | `0F6AC0` | ✓ |
+| dark | `58575F` | ✓ | steel | `417D9A` | ✓ |
 
-## Simplicity Assessment
+Backgrounds: Grass `#8BBE8A` ✓, Fire `#FFA756` ✓ (both exact §10.3). §10.1 base colors and §10.2 sizes/weights also transcribed correctly.
 
-- Lines that could be removed: ~0. Both files are minimal — no speculative helpers (`map`/`fold`/`when` on `Result`, factory constructors, etc.) were added; those belong to the layer that first needs them.
-- Unnecessary abstractions: none. No `freezed`/`equatable` pulled in for two tiny types (plan-justified).
-- YAGNI violations: none. `Result` exposes only `value`/`failure`; no premature combinators.
-- Complexity verdict: Already minimal.
+### Verification performed
 
-## Testing Assessment
-
-- New code with tests: PASS — both `failure.dart` and `result.dart` have dedicated, behavior-focused test files.
-- Test quality: Meaningful. No tautologies; equality is tested across all three relevant axes; pattern-matching exhaustiveness is exercised through real `switch` behavior rather than asserting framework internals.
-- State management test coverage: N/A (no providers in this PR).
-- UI component test coverage: N/A (pure-Dart error core, no widgets).
+- `dart analyze` (MCP) on `lib/app/theme`, `lib/core/pokemon`, `lib/app/app.dart`, `test/app` → **No errors**.
+- Full test suite with coverage (very_good test) → **passed**.
+- Hex / token cross-check against Tech Spec §10.1–§10.3 → all exact.
 
 ---
 
-**Overall verdict: READY TO MERGE (code) — commit the untracked `lib/core/error` + `test/core/error` as a `feat(core)` commit before pushing; zero critical and zero code-level important issues.**
+**Verdict:** Ready to merge — 0 critical, 0 blocking-important issues; minor items (Material 3 `surface`, unwired tokens, font-family duplication, Semibold asset) are defer-to-T-18 / nice-to-have, plus the standard "commit before CI" process caveat.
