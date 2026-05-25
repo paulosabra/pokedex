@@ -1,0 +1,13 @@
+# Repo-global codegen configuration.
+#
+# `field_rename: snake` lets DTO/entity Dart fields stay camelCase while their JSON
+# keys are snake_case — matching the PokéAPI wire format on decode and producing a
+# symmetric snake_case round-trip for the domain-entity cache payloads (T-12/T-14).
+# Hyphenated keys (e.g. "official-artwork") are NOT snake-convertible, so those use
+# an explicit @JsonKey(name: ...) at the field.
+targets:
+  $default:
+    builders:
+      json_serializable:
+        options:
+          field_rename: snake
