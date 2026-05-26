@@ -1,20 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pokedex/app/theme/pokemon_type_theme.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
 import 'package:pokedex/core/ui/components/type_badge.dart';
 
-Future<void> _pumpBadge(
-  WidgetTester tester, {
-  required PokemonTypeId type,
-  TypeBadgeSize size = TypeBadgeSize.small,
-}) {
+Future<void> _pumpBadge(WidgetTester tester, PokemonTypeId type) {
   return tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
-        body: Center(
-          child: TypeBadge(type: type, size: size),
-        ),
+        body: Center(child: TypeBadge(type: type)),
       ),
     ),
   );
@@ -23,15 +18,21 @@ Future<void> _pumpBadge(
 void main() {
   group('TypeBadge', () {
     testWidgets('renders the title-cased type label', (tester) async {
-      await _pumpBadge(tester, type: PokemonTypeId.grass);
+      await _pumpBadge(tester, PokemonTypeId.grass);
 
       expect(find.text('Grass'), findsOneWidget);
+    });
+
+    testWidgets('renders the type icon', (tester) async {
+      await _pumpBadge(tester, PokemonTypeId.grass);
+
+      expect(find.byType(SvgPicture), findsOneWidget);
     });
 
     testWidgets('applies the PokemonTypeTheme color to the background', (
       tester,
     ) async {
-      await _pumpBadge(tester, type: PokemonTypeId.fire);
+      await _pumpBadge(tester, PokemonTypeId.fire);
 
       final decorated = tester.widget<DecoratedBox>(
         find.descendant(
@@ -51,26 +52,11 @@ void main() {
       tester,
     ) async {
       for (final type in PokemonTypeId.values) {
-        await _pumpBadge(tester, type: type);
+        await _pumpBadge(tester, type);
         final expected =
             '${type.name[0].toUpperCase()}${type.name.substring(1)}';
         expect(find.text(expected), findsOneWidget);
       }
-    });
-
-    testWidgets('grows when sized medium', (tester) async {
-      await _pumpBadge(tester, type: PokemonTypeId.water);
-      final smallSize = tester.getSize(find.byType(TypeBadge));
-
-      await _pumpBadge(
-        tester,
-        type: PokemonTypeId.water,
-        size: TypeBadgeSize.medium,
-      );
-      final mediumSize = tester.getSize(find.byType(TypeBadge));
-
-      expect(mediumSize.height, greaterThan(smallSize.height));
-      expect(mediumSize.width, greaterThan(smallSize.width));
     });
 
     group('goldens', () {
@@ -79,26 +65,14 @@ void main() {
         PokemonTypeId.fire,
         PokemonTypeId.water,
       ]) {
-        testWidgets('${type.name} small', (tester) async {
-          await _pumpBadge(tester, type: type);
+        testWidgets(type.name, (tester) async {
+          await _pumpBadge(tester, type);
           await expectLater(
             find.byType(TypeBadge),
-            matchesGoldenFile('goldens/type_badge_${type.name}_small.png'),
+            matchesGoldenFile('goldens/type_badge_${type.name}.png'),
           );
         });
       }
-
-      testWidgets('grass medium', (tester) async {
-        await _pumpBadge(
-          tester,
-          type: PokemonTypeId.grass,
-          size: TypeBadgeSize.medium,
-        );
-        await expectLater(
-          find.byType(TypeBadge),
-          matchesGoldenFile('goldens/type_badge_grass_medium.png'),
-        );
-      });
     });
   });
 }

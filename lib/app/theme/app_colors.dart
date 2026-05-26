@@ -20,6 +20,10 @@ abstract final class AppColors {
   /// Search-field / input background.
   static const Color backgroundInput = Color(0xFFF2F2F2);
 
+  /// Pressed / focused input background — Figma Style Guide
+  /// `Background / Pressed Input` (`Text Field / Focused`, frame `329:1441`).
+  static const Color backgroundPressedInput = Color(0xFFE2E2E2);
+
   /// Screen and sheet background.
   static const Color backgroundWhite = Color(0xFFFFFFFF);
 

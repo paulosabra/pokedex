@@ -47,12 +47,16 @@ class SearchField extends StatelessWidget {
         hintStyle: AppTypography.description,
         filled: true,
         fillColor: AppColors.backgroundInput,
-        prefixIcon: const Icon(Icons.search, color: AppColors.textGray),
+        prefixIcon: const Padding(
+          padding: EdgeInsetsDirectional.only(start: 25, end: 10),
+          child: Icon(Icons.search, color: AppColors.textGray, size: 20),
+        ),
+        prefixIconConstraints: const BoxConstraints(minHeight: 60),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(10),
           borderSide: BorderSide.none,
         ),
-        contentPadding: const EdgeInsets.symmetric(vertical: 12),
+        contentPadding: const EdgeInsets.symmetric(vertical: 20),
       ),
     );
   }
