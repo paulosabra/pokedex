@@ -28,13 +28,13 @@ abstract interface class PokemonRepository {
   /// then served cache-first, so this call requires connectivity.
   Future<Result<EvolutionChain>> getEvolutionChain(int id);
 
-  /// Searches cached summaries by name or number (RN-06/07), offline-capable.
-  Future<Result<List<Pokemon>>> search(String query);
-
-  /// Filters cached summaries (RN-08), ordered by [sort], offline-capable.
-  Future<Result<List<Pokemon>>> filter(
-    PokemonFilter filter, {
+  /// Reads cached summaries by intersecting [query], [filter] and [sort]
+  /// (RN-06/07/08), offline-capable. A null [query] or [filter] means "no
+  /// constraint on that axis"; [sort] is always required.
+  Future<Result<List<Pokemon>>> findPokemon({
     required SortCriteria sort,
+    String? query,
+    PokemonFilter? filter,
   });
 
   /// A reactive stream of cached summaries matching [filter], ordered by

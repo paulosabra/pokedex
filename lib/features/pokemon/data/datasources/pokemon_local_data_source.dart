@@ -32,14 +32,13 @@ abstract interface class PokemonLocalDataSource {
   /// Reads a cached type's relations by id, or null on a cache miss.
   Future<TypeRelationRow?> readTypeRelation(int typeId);
 
-  /// Queries cached summaries with an optional search term, [filter], and
-  /// generation, ordered by [sort]. Search and filters combine cumulatively
-  /// (RN-08); zero matches return an empty list, never an error.
+  /// Queries cached summaries with an optional search term and [filter],
+  /// ordered by [sort]. Search and filters combine cumulatively (RN-08);
+  /// zero matches return an empty list, never an error.
   Future<List<PokemonSummaryRow>> querySummaries({
     required SortCriteria sort,
     String? query,
     PokemonFilter? filter,
-    int? generationId,
   });
 
   /// Like [querySummaries] but reactive: re-emits whenever the matching cached
@@ -48,6 +47,5 @@ abstract interface class PokemonLocalDataSource {
     required SortCriteria sort,
     String? query,
     PokemonFilter? filter,
-    int? generationId,
   });
 }

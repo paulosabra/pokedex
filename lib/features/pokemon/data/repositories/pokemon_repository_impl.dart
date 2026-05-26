@@ -5,7 +5,9 @@ import 'package:pokedex/core/database/app_database.dart';
 import 'package:pokedex/core/database/cache_policy.dart';
 import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/error/result.dart';
+import 'package:pokedex/core/network/connectivity_provider.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
+import 'package:pokedex/features/pokemon/data/datasources/pokemon_dao.dart';
 import 'package:pokedex/features/pokemon/data/datasources/pokemon_local_data_source.dart';
 import 'package:pokedex/features/pokemon/data/datasources/pokemon_remote_data_source.dart';
 import 'package:pokedex/features/pokemon/data/dtos/location_area_encounter_dto.dart';
@@ -22,6 +24,9 @@ import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_page.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
 import 'package:pokedex/features/pokemon/domain/repositories/pokemon_repository.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
+
+part 'pokemon_repository_impl.g.dart';
 
 /// Implementation of [PokemonRepository] (RN-02). Detail reads are cache-first
 /// (fresh hits revalidate in the background, stale hits revalidate
@@ -157,15 +162,13 @@ class PokemonRepositoryImpl implements PokemonRepository {
   }
 
   @override
-  Future<Result<List<Pokemon>>> search(String query) => _readSummaries(
-    _local.querySummaries(sort: SortCriteria.numberAsc, query: query),
-  );
-
-  @override
-  Future<Result<List<Pokemon>>> filter(
-    PokemonFilter filter, {
+  Future<Result<List<Pokemon>>> findPokemon({
     required SortCriteria sort,
-  }) => _readSummaries(_local.querySummaries(sort: sort, filter: filter));
+    String? query,
+    PokemonFilter? filter,
+  }) => _readSummaries(
+    _local.querySummaries(sort: sort, query: query, filter: filter),
+  );
 
   @override
   Stream<List<Pokemon>> watchCachedSummaries({
@@ -307,3 +310,12 @@ class PokemonRepositoryImpl implements PokemonRepository {
     }
   }
 }
+
+/// Provides the [PokemonRepository], returning the abstract type so callers
+/// (use cases) depend on the interface (DIP).
+@riverpod
+PokemonRepository pokemonRepository(Ref ref) => PokemonRepositoryImpl(
+  ref.watch(pokemonRemoteDataSourceProvider),
+  ref.watch(pokemonLocalDataSourceProvider),
+  ref.watch(connectivityProvider),
+);

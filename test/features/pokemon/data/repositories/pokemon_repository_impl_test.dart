@@ -80,26 +80,14 @@ class _FailingDetailWriteLocal implements PokemonLocalDataSource {
     required SortCriteria sort,
     String? query,
     PokemonFilter? filter,
-    int? generationId,
-  }) => _inner.querySummaries(
-    sort: sort,
-    query: query,
-    filter: filter,
-    generationId: generationId,
-  );
+  }) => _inner.querySummaries(sort: sort, query: query, filter: filter);
 
   @override
   Stream<List<PokemonSummaryRow>> watchSummaries({
     required SortCriteria sort,
     String? query,
     PokemonFilter? filter,
-    int? generationId,
-  }) => _inner.watchSummaries(
-    sort: sort,
-    query: query,
-    filter: filter,
-    generationId: generationId,
-  );
+  }) => _inner.watchSummaries(sort: sort, query: query, filter: filter);
 }
 
 void main() {
@@ -495,10 +483,14 @@ void main() {
     });
   });
 
-  group('search / filter / watch (cache-backed)', () {
+  group('findPokemon / watch (cache-backed)', () {
     setUp(() async {
       final bulbasaur = composedDetail().summary;
-      final charmander = bulbasaur.copyWith(id: 4, name: 'charmander');
+      final charmander = bulbasaur.copyWith(
+        id: 4,
+        name: 'charmander',
+        types: const [PokemonTypeId.fire],
+      );
       await dao.upsertSummaries([
         summaryToCompanion(
           bulbasaur,
@@ -515,19 +507,57 @@ void main() {
       ]);
     });
 
-    test('search delegates to the cache and maps rows to entities', () async {
-      final result = await repo.search('bulba');
+    test('with only sort returns every row in sort order', () async {
+      final result = await repo.findPokemon(sort: SortCriteria.numberDesc);
+      final list = (result as Ok<List<Pokemon>>).value;
+      expect(list.map((p) => p.id), [4, 1]);
+    });
+
+    test('with only query narrows by name', () async {
+      final result = await repo.findPokemon(
+        sort: SortCriteria.numberAsc,
+        query: 'bulba',
+      );
       final list = (result as Ok<List<Pokemon>>).value;
       expect(list.map((p) => p.id), [1]);
     });
 
-    test('filter returns an Ok list ordered by sort', () async {
-      final result = await repo.filter(
-        const PokemonFilter(),
-        sort: SortCriteria.numberDesc,
+    test('with only filter narrows by type', () async {
+      final result = await repo.findPokemon(
+        sort: SortCriteria.numberAsc,
+        filter: const PokemonFilter(types: {PokemonTypeId.fire}),
       );
       final list = (result as Ok<List<Pokemon>>).value;
-      expect(list.map((p) => p.id), [4, 1]);
+      expect(list.map((p) => p.id), [4]);
+    });
+
+    test('with query + filter intersects both (RN-08)', () async {
+      final result = await repo.findPokemon(
+        sort: SortCriteria.numberAsc,
+        query: 'char',
+        filter: const PokemonFilter(types: {PokemonTypeId.fire}),
+      );
+      final list = (result as Ok<List<Pokemon>>).value;
+      expect(list.map((p) => p.id), [4]);
+    });
+
+    test('surfaces a corrupt summary row as CacheFailure', () async {
+      await dao.upsertSummaries([
+        PokemonSummariesCompanion.insert(
+          id: const Value(2),
+          name: 'corrupt',
+          nameNormalized: 'corrupt',
+          primaryTypeId: 0,
+          generationId: 1,
+          height: 1,
+          payloadJson: '{"corrupt":true}',
+          updatedAt: nowMs(),
+        ),
+      ]);
+
+      final result = await repo.findPokemon(sort: SortCriteria.numberAsc);
+
+      expect((result as Err<List<Pokemon>>).failure, isA<CacheFailure>());
     });
 
     test('watchCachedSummaries maps the cache stream', () async {
@@ -560,24 +590,5 @@ void main() {
         expect(first.map((p) => p.id), [1, 4]);
       },
     );
-  });
-
-  test('search surfaces a corrupt summary row as CacheFailure', () async {
-    await dao.upsertSummaries([
-      PokemonSummariesCompanion.insert(
-        id: const Value(1),
-        name: 'x',
-        nameNormalized: 'x',
-        primaryTypeId: 0,
-        generationId: 1,
-        height: 1,
-        payloadJson: '{"corrupt":true}',
-        updatedAt: nowMs(),
-      ),
-    ]);
-
-    final result = await repo.search('x');
-
-    expect((result as Err<List<Pokemon>>).failure, isA<CacheFailure>());
   });
 }
