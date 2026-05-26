@@ -1,194 +1,184 @@
 ---
-title: "Test Quality Review — PR3 (data-part3)"
-date: 2026-05-25
-branch: feature/data-part3
-reviewer: Test Quality Agent (VGV)
+title: "Test Quality Review — Domain Layer (feature/domain-layer)"
+date: 2026-05-26
+branch: feature/domain-layer
+reviewer: Test Quality Review Agent (VGV)
+plan: docs/plan/2026-05-26-feat-domain-layer-plan.md
 ---
 
 ## Test Quality Review
 
 ### Coverage Summary
 
-- **Test run**: Pass (all tests green)
-- **Overall project coverage**: 61.4% (1,267 / 2,064 instrumented lines) — the low total is expected because the UI epic is not yet implemented; the data layer's own numbers are what matter here
-- **Mapper coverage (T-12 surface)**: 100% line coverage on all six mapper files
-- **RepositoryImpl coverage (T-13 surface)**: 100% line coverage (113 / 113 lines)
-- **Domain entity coverage**: mixed — see gaps below
+- **Test run:** Pass (all suites green)
+- **Overall coverage (including generated files):** 63.0% (1450/2303 lines)
+- **Hand-written files coverage (excluding `*.g.dart` / `*.freezed.dart`):** 93.0% (627/674 lines) — above the ≥80% gate
+- **Files with tests:** All new domain-layer files have corresponding test files. No missing test files.
 
-| File | Coverage |
-|---|---|
-| `data/mappers/generation_ranges.dart` | 100% (11/11) |
-| `data/mappers/type_effectiveness.dart` | 100% (22/22) |
-| `data/mappers/pokemon_mapper.dart` | 100% (10/10) |
-| `data/mappers/pokemon_detail_mapper.dart` | 100% (66/66) |
-| `data/mappers/evolution_mapper.dart` | 100% (25/25) |
-| `data/mappers/cache_mapper.dart` | 100% (33/33) |
-| `data/repositories/pokemon_repository_impl.dart` | 100% (113/113) |
-| `domain/entities/location_entry.dart` | **0% (0/2)** |
-| `domain/entities/location_entry.g.dart` | **25% (2/8)** |
+**Coverage breakdown for files below 100% (hand-written only):**
 
-**Missing test files**: none. Every production file in the reviewed scope has a corresponding test file.
+| File | Coverage | Gap | Severity |
+|---|---|---|---|
+| `lib/app/router/app_router.dart` | 0.0% (0/9) | All 9 executable lines — provider body always overridden in tests | Important |
+| `lib/core/network/connectivity_provider.dart` | 0.0% (0/2) | Both lines — always overridden before executing | Low |
+| `lib/core/database/app_database.dart` | 10.3% (4/39) | Table column DSL definitions; `_openConnection`; `appDatabase` provider body | Low |
+| `lib/features/pokemon/presentation/pages/pokemon_list_screen.dart` | 87.5% (7/8) | Line 20 — `context.go('/pokemon/1')` inside `onTap` | Low |
+
+**Context on the 0% files:** Both `app_router.dart` and `connectivity_provider.dart` show 0% because every test that touches them overrides the provider before the body executes. The `app_router.dart` gap is the most consequential: a route-path typo in the real provider body (e.g., `/pokemon/:di` instead of `/pokemon/:id`) would not be caught. The plan requires `routerProvider` to appear in the `keepAlive` identity check — see the Important gap under the provider graph test. The `app_database.dart` low score is dominated by the Drift-generated table column DSL lines, which are not user logic. These gaps do not break the ≥80% gate.
 
 ---
 
-### Mapper Test Quality (T-12)
+### Repository Impl Test Quality — `findPokemon` block
 
-#### generation_ranges_test.dart — Pass with suggestions
+**File:** `test/features/pokemon/data/repositories/pokemon_repository_impl_test.dart`
 
-The test covers end-of-generation boundary values and both out-of-range sentinels, and it correctly caught a real `generationForId(0)` bug during development. The `kUnknownGenerationId == 0` assertion is borderline (testing a constant rather than behavior) but it functions as a cross-layer contract test given the DAO depends on the numeric value 0 being "unknown."
+**Result:** Pass — parametric matrix is complete and meaningful.
 
-**Gap — start-of-generation boundaries for gens 3–8 are not tested.** The test verifies `152` (Gen 2 start) and `906` (Gen 9 start) but skips `252`, `387`, `494`, `650`, `722`, and `810`. An off-by-one error that shifted the `<= 251` guard to `<= 252` would return `2` for id `252` instead of `3`, and the current suite would not catch it. With 100% line coverage this cannot cause a hidden regression today, but the gap makes the boundary contract weaker than it should be for a "highest-bug-risk surface."
+- The five-case matrix (sort-only, query-only, filter-only, query+filter, corrupt-row) exercises the DAO's combined query against a real in-memory Drift database. Each assertion checks the output — entity ids in expected order — not the delegation call signature. This is correct behaviour-level testing.
+- The corrupt-row case asserts `CacheFailure`, testing the repository's error-mapping contract rather than the DAO's exception type.
+- The `watchCachedSummaries` block is preserved intact, including the corrupt-row drop test.
+- The `setUp` for this group seeds two realistic Pokémon (bulbasaur grass+poison, charmander fire) using the real `upsertSummaries` DAO path, giving genuine SQL execution. No mocked query results.
+- No `registerFallbackValue` is needed here: the repository test passes concrete values directly to the real DAO rather than using `any(named:)` matchers on `SortCriteria` or `PokemonFilter`. Correct.
 
-#### type_effectiveness_test.dart — Pass
-
-Strong fixture-backed setup with real API JSON for Grass, Poison, Ground, and Electric types. All four RN-10 calculation paths are explicitly asserted:
-
-- Single-type 2x and 0.5x
-- Dual-type Grass/Poison 2x, 0.25x, and neutral-cancellation (key business rule)
-- Dual-type Grass/Ground 4x accumulation (RN-10)
-- Dual-type Grass/Ground 0x immunity (RN-10)
-- Empty relation map degrading to neutral (TE-10)
-
-The `weaknessMask` is verified against `typeWeaknessMask(effect.weaknesses)` — this is a legitimate structural check, not a tautology, because it confirms the mask field is kept in sync with the weaknesses list.
-
-No issues found.
-
-#### pokemon_mapper_test.dart — Pass
-
-Tests cover: dual-type ordering by slot, single-type, empty sprite fallback, and unknown type name filtering (TE-10). Real fixtures are used for the two main cases. The test file is concise and all assertions are behavioral.
-
-No issues found.
-
-#### pokemon_detail_mapper_test.dart — Pass
-
-Covers a comprehensive set of the detail mapping contract:
-
-- Scalar fields, height, weight, genus from real Bulbasaur fixtures
-- Flavor text sanitization: verifies `\n` and `\f` removal and double-space collapse (RN-07)
-- Abilities with hidden flag
-- Gender percentages at rate 1 (12.5% female) and rate -1 (Ditto, genderless) — RN-11
-- Level-100 min/max stat formulas for HP and non-HP with documented arithmetic (RN-12)
-- Total stat sum
-- Type defense and weakness pass-through (RN-10)
-- Location mapping from encounter fixture (RF-34)
-- Full null-species degradation (TE-10)
-
-The stat formula assertions include inline comments that document the expected arithmetic, which is exemplary.
-
-**Minor gap**: there is no test for a species present but containing no English flavor text entries. The `_englishFlavorText` function has `english.isEmpty ? '' : ...` — this branch is distinct from `species == null` (which is tested) but is never exercised.
-
-**Minor gap**: `gender_rate` boundary values `0` (100% male) and `8` (100% female) are not tested. The formula `rate / 8 * 100` is simple and covered at `rate = 1`, but the zero-result and full-result cases have not been explicitly pinned.
-
-**Minor gap**: `evYield` is tested for a single-stat EV yield (`1 Sp. Atk`). A multi-stat case (e.g., `1 Attack, 1 Speed`) is not tested; the join logic in `_evYield` has a code path for multiple contributing stats.
-
-#### evolution_mapper_test.dart — Important issue
-
-**The 100% line coverage figure masks insufficient behavioral assertions on the Eevee test.**
-
-The Eevee branching test (line 31) only asserts:
-1. `chain.root.stage.name == 'eevee'`
-2. `chain.root.evolvesTo.length == 8`
-3. `vaporeon.stage.condition == 'Use water stone'`
-
-The Eevee fixture exercises all five remaining condition branches in `_conditionFrom` — `minHappiness` (Espeon and Umbreon), `timeOfDay` (Espeon day, Umbreon night), and `location` (Leafeon, Glaceon) — but none of these output strings are asserted. The three branches that produce `'High friendship'`, `'During day'`/`'During night'`, and `'At eterna-forest'` run silently, with their output discarded. A bug that corrupted those condition strings would not be detected by the current test.
-
-The dedicated constructor test (lines 45–85) correctly adds `heldItem` and `knownMove` coverage via a synthetic DTO, which is the right pattern. But the Eevee fixture test should be extended to spot-check at minimum one node from each of the three remaining condition families.
-
-**Pattern note**: the Eevee branching test verifies structural completeness (count) and one representative value. This is a good starting point but, for a surface designated T-12 (highest-bug-risk), every output path of the condition mapper should have an assertion. The test as written provides false confidence: it would still pass if `minHappiness` produced `null` or if `timeOfDay` produced a garbled string.
-
-#### cache_mapper_test.dart — Pass with minor gap
-
-All four cache entity types have explicit round-trip tests (summary, detail, evolution, type-relations). The `summaryToCompanion` companion test verifies each derived SQL column individually, not just the JSON blob. The `pokemonFromRow` round-trip confirms the entity survives encode/decode unchanged.
-
-**Minor gap**: all tests use Bulbasaur (dual-type: Grass/Poison). The `summaryToCompanion` function sets `secondaryTypeId: Value(null)` for single-type Pokémon, and the `summaryToCompanion` companion test never exercises this branch. A Pikachu (single-type Electric) fixture is available and could close this with a two-line companion test.
-
-**Minor gap**: the detail round-trip always uses `encounters: const []`. The `LocationEntry.fromJson` factory is therefore never called in the entire test suite (confirmed by 0% coverage on `location_entry.dart`). The cache_mapper round-trip should use the `encounters_bulbasaur.json` fixture to exercise location deserialization from the JSON cache layer.
+**Minor finding (style):** The group header is named `'findPokemon / watch (cache-backed)'`, mixing two distinct concerns. The `watchCachedSummaries` tests live inside the same group but represent a separate method. Splitting into `'findPokemon (cache-backed)'` and `'watchCachedSummaries'` would make test output easier to scan. Not a correctness issue.
 
 ---
 
-### Repository Implementation Test Quality (T-13)
+### Use Case Test Quality — 5 files
 
-#### pokemon_repository_impl_test.dart — Pass with important gaps
+#### `get_pokemon_list_test.dart`
 
-**Architecture**: the test correctly uses a real in-memory Drift database (`NativeDatabase.memory()`) as the local source and Mocktail mocks for the remote and connectivity. This is the right approach — it exercises the actual DAO query behavior and catches real SQL/ORM issues while isolating network calls. The injected clock and helper functions (`nowMs`, `daysAgo`) make TTL tests deterministic. Fixture files are used for all remote DTO data.
+**Result:** Pass with one minor note.
 
-**Decision machine coverage for `getPokemonDetail`**:
+- Two cases (Ok pass-through, Err pass-through) are appropriate for a pure delegate. The use case has no branching logic.
+- The Ok test asserts both the return type (`isA<Ok<PokemonPage>>`) and value identity (`same(page)`) and verifies exact named arguments (`limit: 20, offset: 40`). Correct granularity for a delegate.
+- The Err test unpacks the failure and checks its runtime type. Appropriate.
+- No `setUpAll` / `registerFallbackValue` is needed for `int` parameters. Correct.
+- **Minor note — over-verification:** The Ok test calls `verify(() => repository.getPokemonList(limit: 20, offset: 40)).called(1)`. For a pure delegate, the mock only returns the stubbed value when the `when(...)` matcher fires with the correct arguments; therefore the `same(page)` identity assertion already implies the method was called correctly. The `verify` adds no additional information and couples the test to the call signature rather than the behaviour. Per VGV guidelines: assert behaviour and output, not implementation. **Severity: Low.**
 
-| Branch | Tested |
-|---|---|
-| Cold miss, online → compose, cache, return | Yes |
-| Cold miss, offline → NetworkFailure | Yes |
-| Mandatory `/pokemon` fails → propagate failure | Yes |
-| Fresh cache, online → return cached, background revalidate | Yes |
-| Stale cache, network success → return fresh | Yes |
-| Stale cache, network failure → serve stale (TE-02) | Yes |
-| Corrupt cache, online → treat as miss, recompose | Yes |
-| Corrupt cache, offline → CacheFailure | Yes |
-| Partial compose (species fails) → return degraded, not cached | Yes |
-| Partial compose (type + encounters fail) → return degraded, not cached | Yes |
-| Type cache reuse (fresh cached relations) → no remote type fetch | Yes |
+#### `find_pokemon_test.dart`
 
-The stale+failure test (TE-02) verifies the stale value is the exact sentinel `'STALE'`, not merely "non-empty." This is a meaningful assertion.
+**Result:** Pass.
 
-**Issue — fresh cache background revalidate test uses a bare type assertion.** The test at line 196 asserts `expect(result, isA<Ok<PokemonDetail>>())` and then verifies `remote.fetchPokemon` was called. It does not assert that the returned value is the original cached entity (i.e., that the background fetch did not block the return). This is the central contract of the "serve cache immediately, update in background" pattern. The assertion `expect((result as Ok).value, stateEquals(cached))` or at minimum `expect((result as Ok).value.description, isNot('STALE'))` (with a sentinel-seeded cache) would make the test authoritative.
+- `registerFallbackValue(SortCriteria.numberAsc)` is registered in `setUpAll`. `SortCriteria` is an enum used as a non-nullable named argument; mocktail requires a fallback value for `any(named:)` on non-nullable types. Correct.
+- `PokemonFilter` is matched with `filter: any(named: 'filter')` and the parameter is nullable (`PokemonFilter?`). Mocktail does not require a fallback for nullable types. No `registerFallbackValue(PokemonFilter(...))` was added — correct YAGNI.
+- The Ok test passes concrete `sort`, `query`, and `filter` values and verifies those exact values were forwarded via `verify`. Identity check (`same(matches)`) confirms no transformation.
+- The Err test omits `query` and `filter`, exercising the all-null (default) path.
 
-**Issue — stale evolution chain is not tested.** The evolution chain tests cover two states: cold miss (line 318) and fresh cache hit (line 337). The third state — row exists but is stale (`_isFresh` returns false) — is absent. In this case the implementation falls through to a remote fetch and updates the cache. This path includes the `upsertEvolutionChain` call that is not otherwise exercised. Given the TTL branch is already proven for `getPokemonDetail`, the risk is low, but the omission means the TTL enforcement for evolution chains is unverified.
+#### `get_pokemon_detail_test.dart`
 
-**Issue — null `chainId` branch untested.** `getEvolutionChain` has a guard `if (chainId == null) return const Err(NotFoundFailure())` (line 125). The LCOV data confirms this line is not instrumented — it was never executed across all tests because all fixtures have well-formed evolution chain URLs. A test that provides a species with a malformed or absent `evolutionChain.url` would close this.
+**Result:** Pass with one minor note.
 
-**Issue — corrupt evolution cache is not tested.** The `_tryParse` path within the fresh evolution cache branch (line 130) is hit only by the happy-path test. There is no test for a row that is fresh but has corrupt JSON, which would cause `_tryParse` to return null and fall through to a remote fetch. The analogous corrupt-cache tests exist for `getPokemonDetail` but not for `getEvolutionChain`.
+- Uses `_FakeDetail extends Fake implements PokemonDetail` as the return value. This is the correct mocktail idiom for a complex object used only for identity comparison — a `Fake` avoids implementing all interface members while providing a concrete instance for `same(detail)`.
+- **Minor note — over-verification:** `verify(() => repository.getPokemonDetail(25)).called(1)` is the same over-verification pattern noted in `get_pokemon_list_test`. The `same(detail)` assertion already implies correct delegation. **Severity: Low.**
+- No `registerFallbackValue` is needed for `int` parameters. Correct.
 
-**`getPokemonList` coverage**: three tests cover the core paths (offline, success with `hasMore`, empty page, per-id failure). The success test verifies `items.length == 1`, `hasMore == true`, and that the DAO received the upsert — sufficient at the integration level since `pokemonFromDto` is independently unit-tested.
+#### `get_evolution_chain_test.dart`
 
-**`search` / `filter` / `watchCachedSummaries`**:
-- Search delegates correctly and the corrupt-summary CacheFailure path is explicitly tested (line 404).
-- Filter is tested with `const PokemonFilter()` (all defaults, no active criteria). The delegation of type, weakness, and height filter parameters to the DAO is never exercised at the repository level. The DAO itself tests these in `pokemon_dao_test.dart`, so this is a boundary choice, but the composition is unverified at the repository layer.
-- `watchCachedSummaries` has one happy-path stream test. The error path (corrupt summary in the stream — which would throw `FormatException` since no error handling wraps the `.map()`) is untested.
+**Result:** Pass with one minor note.
+
+- Same pattern as `get_pokemon_detail_test` — `_FakeChain` fake, `same(chain)` identity check.
+- Both test cases use `id: 1`. No test exercises `id: 0` or a large id; for a pure delegate this is acceptable — the repository tests own the id-routing logic.
+- The same over-verification note applies as above. **Severity: Low.**
+
+#### `watch_pokemon_list_test.dart`
+
+**Result:** Pass with one minor finding — the strongest of the five files overall.
+
+- Four explicit test cases match the plan's stated requirements: initial emission propagation, subsequent emissions in order, filter forwarding, and static type contract.
+- The static-type test uses `// ignore: omit_local_variable_types` plus `final Stream<List<Pokemon>> stream = useCase(...)` as a compile-time assertion. This is the correct technique — the assignment refuses to compile if the return type drifts to `Stream<Result<List<Pokemon>>>`.
+- **Finding — tautological runtime assertion:** The line `expect(stream, isA<Stream<List<Pokemon>>>())` that follows the typed assignment is unreachable as a meaningful assertion. The compile-time constraint on the variable declaration already guarantees the runtime type. A test that would only fail at runtime (never at compile time) cannot provide additional safety here — if the assignment compiled, `isA<Stream<List<Pokemon>>>()` will always be true. This is a tautological assertion per VGV anti-pattern guidelines. **Severity: Low.** The comment above the typed assignment correctly explains the intent; the `expect` line should be removed.
+- `registerFallbackValue(SortCriteria.numberAsc)` registered correctly; nullable `PokemonFilter?` needs no fallback. Correct.
+- "Propagates subsequent emissions in order" uses `Stream.fromIterable(const [...])` + `.toList()` — a clean, synchronous-stream approach without unnecessary async scaffolding.
+- The filter forwarding test drains the stream with `.drain<void>()` before calling `verify`, ensuring the stream is subscribed and the delegation fires. Correct sequencing.
+
+---
+
+### Boot Widget Test Quality — `app_boot_test.dart`
+
+**Result:** Pass.
+
+- Two tests covering the two routes: boot to `/` (list placeholder) and deep-link to `/pokemon/25` (detail placeholder).
+- Both tests wrap `PokedexApp` in `ProviderScope` with `routerProvider.overrideWith(...)`. The override is required (as the plan notes) because the default `routerProvider` boots at `/` — without the override the deep-link test would land on the list, not the detail.
+- The boot test asserts `MaterialApp.routerConfig` is not null, theme is not null, theme background colour matches `AppColors.backgroundWhite`, and `PokemonListScreen` is found in the widget tree. These are meaningful structural assertions, not tautologies.
+- The deep-link test uses `pumpAndSettle()` to allow `GoRouter`'s asynchronous navigation to complete, then reads the `PokemonDetailScreen` widget and asserts `detail.id == 25`. This directly verifies the route parameter parsing (`int.parse(state.pathParameters['id']!)`). Correct and meaningful.
+- The `_routerAt(String location)` helper avoids duplication and keeps both tests readable.
+
+---
+
+### Provider Graph Test Quality — `provider_graph_test.dart`
+
+**Result:** Mostly Pass — the `keepAlive` identity test is genuine and meaningful. One important gap noted.
+
+**What it does well:**
+
+- The `keepAlive` contract test reads each resource-holding provider before invalidating a downstream consumer, then re-reads and asserts `identical(before, after)`. `identical` in Dart compares object references (not equality), so a failing assertion means the provider was disposed and reconstructed — the exact resource-leak scenario the plan identifies as medium-risk. This is substantively stronger than a non-null assertion and passes the "does it test what `dart analyze` cannot" bar.
+- `connectivityProvider` is overridden with `_FakeConnectivity extends Fake implements Connectivity` — a `Fake` subclass with one method stubbed — avoiding real platform channel calls. `appDatabaseProvider` is overridden with an in-memory `AppDatabase.forTesting(NativeDatabase.memory())`. Both are the correct isolation approaches.
+- The use-case type-assertion group uses `isA<T>()` on each provider result. This correctly catches the scenario where a provider body returns a mis-typed or mis-wired object — something `dart analyze` cannot detect because codegen providers return `Object` from the generated factory.
+- `setUp`/`tearDown` correctly create and dispose both the `ProviderContainer` and the in-memory `AppDatabase`. No resource leaks in the test itself.
+
+**Important gap — `routerProvider` is absent from the `keepAlive` contract test:**
+
+The plan's acceptance criteria explicitly list all four `keepAlive: true` providers — `dioProvider`, `appDatabaseProvider`, `connectivityProvider`, and `routerProvider` — as subjects of the identity check. The test verifies the first three but omits `routerProvider`. This means that if `keepAlive: true` is accidentally removed from `app_router.dart`, no test will fail. The `routerProvider` holds navigation history and wires `ref.onDispose(router.dispose)` — losing `keepAlive` would reset the user's navigation state on every downstream rebuild, which is the exact leak class the plan's risk register names. **Severity: Important.**
+
+The omission is partly understandable — constructing a real `GoRouter` in a `ProviderContainer` unit test requires either a widget environment (for route matching) or a carefully isolated router construction. A viable approach is to add `routerProvider` to the same `container` (which already has the in-memory overrides) by additionally overriding `pokemonLocalDataSourceProvider` and `pokemonRemoteDataSourceProvider` so the default `pokemonRepositoryProvider` can resolve, or more simply, by reading `routerProvider` before and after `container.invalidate(routerProvider)` itself (since `routerProvider` has no downstream dependents to trigger the invalidation another way, `container.invalidate` + `container.read` is sufficient). Alternatively, a separate `ProviderContainer` with `overrides: [routerProvider.overrideWith(...)]` could test that a supplied `keepAlive` provider survives invalidation of an unrelated downstream.
+
+**Semantic note on `container.invalidate` + immediate `container.read`:**
+
+The test calls `container.invalidate(pokemonRepositoryProvider)` then `container.read(pokemonRepositoryProvider)` in sequence. `invalidate` marks the provider stale; the immediately following `read` triggers disposal-and-rebuild of the invalidated provider. This sequence correctly exercises the `keepAlive` contract for upstreams because Riverpod disposes non-`keepAlive` upstream providers when their downstream is torn down. The sequencing is valid.
 
 ---
 
 ### Anti-Patterns Found
 
-**evolution_mapper_test.dart:31–43 — Structural count without behavioral assertions**
+**1. `watch_pokemon_list_test.dart` — tautological runtime assertion following a compile-time type constraint**
 
-- Issue: `expect(chain.root.evolvesTo, hasLength(8))` verifies a count but no test asserts the output of the `minHappiness`, `timeOfDay`, or `location` condition branches that the Eevee fixture exercises. Three condition branches produce return values (`'High friendship'`, `'During day'`/`'During night'`, `'At eterna-forest'`) that are silently discarded after execution.
-- Fix: Add `firstWhere` look-ups for Espeon, Umbreon, and Leafeon and assert their `stage.condition` values, matching the pattern already used for Vaporeon.
+- **Location:** static-type-contract test, final `expect` line.
+- **Issue:** `expect(stream, isA<Stream<List<Pokemon>>>())` always passes whenever the preceding typed variable assignment `final Stream<List<Pokemon>> stream = useCase(...)` compiles. The assignment is the load-bearing assertion — it would refuse to compile if the use case returned `Stream<Result<List<Pokemon>>>`. The runtime `expect` adds no information and inflates the "test passes" signal without catching any real bug.
+- **Fix:** Remove the `expect(stream, isA<Stream<List<Pokemon>>>())` line. Leave the typed assignment and the comment. The test comment already explains the intent clearly.
 
-**pokemon_repository_impl_test.dart:196–206 — Bare type assertion on the most important cache contract**
+**2. `get_pokemon_list_test.dart`, `get_pokemon_detail_test.dart`, `get_evolution_chain_test.dart` — over-verification on pure delegates**
 
-- Issue: `expect(result, isA<Ok<PokemonDetail>>())` does not confirm the returned value is the cache snapshot. The core promise of the fresh-cache branch is "caller receives the old value immediately while revalidation proceeds in the background." A bare type check would pass even if the implementation inadvertently awaited the revalidation.
-- Fix: Seed the cache with a sentinel description (as the stale tests do) and assert `expect((result as Ok<PokemonDetail>).value.description, equals(seededDetail.description))`.
+- **Location:** Ok-path test in each of the three files, the `verify(...).called(1)` line.
+- **Issue:** For a pure delegate, the mock only returns the stubbed value when the `when(...)` matcher fires with the correct arguments. A successful return-value assertion (`same(...)` or `isA<Ok<...>>`) therefore already implies the method was called correctly. The subsequent `verify` re-asserts the same fact and couples the test to the delegation implementation detail rather than the observable behaviour. VGV guidelines: "verify behavior and output, not implementation details."
+- **Fix:** Remove `verify(...).called(1)` from the Ok-path tests in all three files. Keep `verify` only when testing a side effect (caching, logging, telemetry) not observable through the return value. The Err-path tests correctly omit `verify` and serve as the reference pattern.
+- **Note:** This is a style/brittleness finding. The tests are not wrong and will catch delegation bugs. The concern is coupling to the call signature.
+
+---
+
+### Missing Test Coverage (non-critical, deferred to UI epic)
+
+- **`app/router/app_router.dart` (0% coverage):** The real `routerProvider` body — `GoRouter(routes: [...])` construction and `ref.onDispose(router.dispose)` — is never executed. A route-path typo in the real provider body would not be caught. The plan does not call for a test that exercises the real body directly; the gap is structural to the override-everywhere approach. Addressed in part by adding `routerProvider` to the provider graph `keepAlive` contract test (see Important gap above).
+
+- **`pokemon_list_screen.dart` line 20 (87.5%):** The `onTap` callback is not exercised. A `tester.tap(find.byType(ListTile))` + `pumpAndSettle` + `expect(find.byType(PokemonDetailScreen), findsOneWidget)` in `app_boot_test.dart` would close it, but this is a placeholder screen scheduled for replacement in T-19+. Acceptable deferral.
 
 ---
 
 ### Recommendations
 
-1. **Extend the Eevee branching test** to assert Espeon's condition (`'High friendship'`), Umbreon's condition (`'During night'` or `'During day'`), and Leafeon's condition (`'At eterna-forest'`). The Vaporeon look-up pattern at line 39 is the right template. This closes the most significant assertion gap for T-12.
+1. **(Important) Add `routerProvider` to the `keepAlive` contract test in `provider_graph_test.dart`.** Read `routerProvider` from the container before and after a downstream invalidation (or after `container.invalidate(routerProvider)` + `container.read(routerProvider)`) and assert `identical(routerBefore, routerAfter)`. If a real `GoRouter` construction is inconvenient in the unit-test context, override `routerProvider` with a cheap stub that returns a minimal `GoRouter(routes: [GoRoute(path: '/', builder: (_, __) => const SizedBox())])`. The identity contract is independent of the route configuration.
 
-2. **Add a location cache deserialization test** — change the `detail cache round-trips through payloadJson` test in `cache_mapper_test.dart` to use `encounters_bulbasaur.json` (already available as a fixture) so that `LocationEntry.fromJson` is exercised. This closes the 0% gap on `location_entry.dart`.
+2. **(Low) Remove the tautological `expect` in the static-type test in `watch_pokemon_list_test.dart`.** The typed variable declaration is the sole load-bearing assertion. Remove `expect(stream, isA<Stream<List<Pokemon>>>())`.
 
-3. **Add a stale evolution chain test** — seed the chain with `updatedAt: daysAgo(8)`, stub `remote.fetchEvolutionChain` to return the DTO, and assert the result is `Ok` and that `verifyNever` on the remote fetch is no longer satisfied. This closes the missing TTL branch and the `upsertEvolutionChain` path in `getEvolutionChain`.
+3. **(Low) Remove `verify(...).called(1)` from the Ok-path in `get_pokemon_list_test`, `get_pokemon_detail_test`, and `get_evolution_chain_test`.** The return-value identity assertions already validate delegation. Use the Err-path tests as the reference pattern.
 
-4. **Add a null `chainId` test** — stub `remote.fetchSpecies` to return a `PokemonSpeciesDto` with an empty or malformed `evolutionChain.url` and assert `NotFoundFailure`.
+4. **(Style) Split `'findPokemon / watch (cache-backed)'` into two groups** in the repository impl test — `'findPokemon (cache-backed)'` and `'watchCachedSummaries'` — to improve test output readability.
 
-5. **Strengthen the fresh cache revalidation test** — seed the cache with a distinguishable sentinel description and assert the returned value matches the cached entity, not the revalidated one, to make the "serve immediately" contract explicit.
-
-6. **Add generation boundary assertions for gens 3–8** — test `generationForId(252)` through `generationForId(810)` at the first ID of each generation to guard against off-by-one regressions at the 251, 386, 493, 649, 721, and 809 boundaries.
-
-7. **Add a single-type summary companion test** — call `summaryToCompanion` with a Pikachu (single-type, `types.length == 1`) and assert `companion.secondaryTypeId.value == null`.
+5. **(Future — UI epic)** When `PokemonListScreen` is implemented, add a widget test that taps the `ListTile` and asserts navigation to `/pokemon/1`. The `onTap` lambda at line 20 is the only uncovered line in the screen.
 
 ---
 
 ### Verdict
 
-**Fix 5 issues before merging.**
+**Fix 1 issue before merging.**
 
-The test suite is well-structured, uses real fixtures and a real in-memory database for the repository, and achieves its stated 100% line coverage targets. Most mapper logic is thoroughly verified. However, five issues need to be addressed:
+The test suite is green, hand-written coverage is 93% (well above the ≥80% gate), and VGV mocktail conventions are followed correctly throughout. The use-case tests are proportionate for pure-delegate classes: argument-forwarding verifications via identity checks, plus 2 cases (Ok/Err) per use case. The `findPokemon` repository matrix is genuinely end-to-end against a real in-memory Drift database. The provider graph `keepAlive` identity test is the right approach and closes the main composition-root risk.
 
-1. The Eevee branching test exercises three condition branches (`minHappiness`, `timeOfDay`, `location`) without asserting their output — false confidence on the highest-bug-risk surface.
-2. `LocationEntry.fromJson` is at 0% coverage because the detail cache round-trip uses empty encounters.
-3. The stale evolution chain branch is untested.
-4. The null `chainId` guard in `getEvolutionChain` is never triggered.
-5. The fresh cache background-revalidation test uses a bare `isA<Ok>` assertion that does not verify the "serve cache immediately" contract.
+The one issue to address before merge is the **missing `routerProvider` identity check in `provider_graph_test.dart`**. The plan explicitly lists all four `keepAlive` providers in its acceptance criteria, and `routerProvider` is the only one not guarded by an identity assertion. If `keepAlive: true` were accidentally removed from `app_router.dart`, no test would fail.
 
-Items 3–5 require small additions; items 1–2 require fixture changes. None require structural refactoring. The three "minor gap" findings in the recommendations section are suggestions rather than blockers.
+The three low-severity findings (tautological `expect`, over-verification `verify` calls, group naming) can be addressed in this PR or tracked as polish items.
+
+| Severity | Count | Items |
+|---|---|---|
+| Important | 1 | Missing `routerProvider` in `keepAlive` identity contract test |
+| Low | 3 | Tautological `expect` in static-type test (`watch_pokemon_list_test.dart`); over-verification `verify` in Ok-path of 3 use-case tests; mixed group name in repository impl test |
