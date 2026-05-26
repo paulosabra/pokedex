@@ -8,6 +8,7 @@ environment:
   sdk: ^3.12.0
 
 dependencies:
+  cached_network_image: ^3.4.1
   connectivity_plus: ^7.1.1
   dio: ^5.9.0
   # drift + drift_dev are pinned exact to the analyzer-9 stable codegen line.
