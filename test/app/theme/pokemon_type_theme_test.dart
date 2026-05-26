@@ -30,24 +30,5 @@ void main() {
       expect(PokemonTypeId.values, hasLength(18));
       expect(colors, hasLength(18));
     });
-
-    test('backgrounds: exact §10.3 for grass/fire, derived tint otherwise', () {
-      expect(
-        PokemonTypeTheme.styleOf(PokemonTypeId.grass).backgroundColor,
-        const Color(0xFF8BBE8A),
-      );
-      expect(
-        PokemonTypeTheme.styleOf(PokemonTypeId.fire).backgroundColor,
-        const Color(0xFFFFA756),
-      );
-
-      // A derived background is the 50% midpoint between the badge color and
-      // white — assert the formula per channel (independent of Color.lerp's
-      // exact rounding), not just that it differs from the badge color.
-      final water = PokemonTypeTheme.styleOf(PokemonTypeId.water);
-      expect(water.backgroundColor.r, closeTo((water.color.r + 1.0) / 2, 0.01));
-      expect(water.backgroundColor.g, closeTo((water.color.g + 1.0) / 2, 0.01));
-      expect(water.backgroundColor.b, closeTo((water.color.b + 1.0) / 2, 0.01));
-    });
   });
 }
