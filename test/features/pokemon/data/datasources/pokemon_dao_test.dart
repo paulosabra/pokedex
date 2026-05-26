@@ -297,6 +297,32 @@ void main() {
       );
     });
 
+    test('by generationId returns only Pokémon from that generation', () async {
+      // The setUp inserts gen-1 rows by default; only chikorita is gen 2.
+      expect(
+        await ids(filter: const PokemonFilter(generationId: 1)),
+        [1, 4, 31, 143],
+      );
+      // Chikorita is the only generationId 2 row.
+      expect(await ids(filter: const PokemonFilter(generationId: 2)), [152]);
+      // A generation with no rows yields an empty result, not an error.
+      expect(await ids(filter: const PokemonFilter(generationId: 5)), isEmpty);
+    });
+
+    test('generationId intersects with types + height', () async {
+      // grass type AND gen 1 AND short → bulbasaur only (chikorita is gen 2).
+      expect(
+        await ids(
+          filter: const PokemonFilter(
+            types: {PokemonTypeId.grass},
+            height: HeightCategory.short,
+            generationId: 1,
+          ),
+        ),
+        [1],
+      );
+    });
+
     test('a zero-result intersection returns empty, not an error', () async {
       // fire type AND tall height → none (charmander is fire but short).
       expect(

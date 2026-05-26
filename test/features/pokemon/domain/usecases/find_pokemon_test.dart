@@ -63,6 +63,44 @@ void main() {
       },
     );
 
+    test('forwards a filter combining generationId with types', () async {
+      const matches = <Pokemon>[
+        Pokemon(
+          id: 152,
+          name: 'chikorita',
+          imageUrl: 'https://img/152.png',
+          generationId: 2,
+          types: [PokemonTypeId.grass],
+        ),
+      ];
+      const filter = PokemonFilter(
+        types: {PokemonTypeId.grass},
+        generationId: 2,
+      );
+      when(
+        () => repository.findPokemon(
+          sort: any(named: 'sort'),
+          query: any(named: 'query'),
+          filter: any(named: 'filter'),
+        ),
+      ).thenAnswer((_) async => const Ok(matches));
+
+      final result = await useCase(
+        sort: SortCriteria.numberAsc,
+        filter: filter,
+      );
+
+      expect((result as Ok<List<Pokemon>>).value, same(matches));
+      // mocktail's verify treats an omitted named arg as "matches the
+      // default value" — here, `query: null`. No wildcard semantics.
+      verify(
+        () => repository.findPokemon(
+          sort: SortCriteria.numberAsc,
+          filter: filter,
+        ),
+      ).called(1);
+    });
+
     test('propagates an Err from the repository unchanged', () async {
       when(
         () => repository.findPokemon(

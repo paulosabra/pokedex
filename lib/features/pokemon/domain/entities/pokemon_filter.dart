@@ -26,5 +26,6 @@ abstract class PokemonFilter with _$PokemonFilter {
     @Default(<PokemonTypeId>{}) Set<PokemonTypeId> types,
     @Default(<PokemonTypeId>{}) Set<PokemonTypeId> weaknesses,
     HeightCategory? height,
+    int? generationId,
   }) = _PokemonFilter;
 }
