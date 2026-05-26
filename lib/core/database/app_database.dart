@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'app_database.g.dart';
 
@@ -118,3 +119,13 @@ QueryExecutor _openConnection() => driftDatabase(
     driftWorker: Uri.parse('drift_worker.js'),
   ),
 );
+
+/// The application-scoped [AppDatabase]. `keepAlive: true` so the SQLite
+/// handle survives provider rebuilds; disposing on rebuild would close the
+/// database mid-flight.
+@Riverpod(keepAlive: true)
+AppDatabase appDatabase(Ref ref) {
+  final db = AppDatabase();
+  ref.onDispose(db.close);
+  return db;
+}

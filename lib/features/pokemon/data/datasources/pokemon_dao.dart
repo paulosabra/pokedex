@@ -4,6 +4,7 @@ import 'package:pokedex/features/pokemon/data/datasources/pokemon_local_data_sou
 import 'package:pokedex/features/pokemon/data/summary_encoding.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'pokemon_dao.g.dart';
 
@@ -67,33 +68,20 @@ class PokemonDao extends DatabaseAccessor<AppDatabase>
     required SortCriteria sort,
     String? query,
     PokemonFilter? filter,
-    int? generationId,
-  }) => _summaryQuery(
-    sort: sort,
-    query: query,
-    filter: filter,
-    generationId: generationId,
-  ).get();
+  }) => _summaryQuery(sort: sort, query: query, filter: filter).get();
 
   @override
   Stream<List<PokemonSummaryRow>> watchSummaries({
     required SortCriteria sort,
     String? query,
     PokemonFilter? filter,
-    int? generationId,
-  }) => _summaryQuery(
-    sort: sort,
-    query: query,
-    filter: filter,
-    generationId: generationId,
-  ).watch();
+  }) => _summaryQuery(sort: sort, query: query, filter: filter).watch();
 
   SimpleSelectStatement<$PokemonSummariesTable, PokemonSummaryRow>
   _summaryQuery({
     required SortCriteria sort,
     String? query,
     PokemonFilter? filter,
-    int? generationId,
   }) {
     final statement = select(pokemonSummaries);
 
@@ -130,10 +118,6 @@ class PokemonDao extends DatabaseAccessor<AppDatabase>
       }
     }
 
-    if (generationId != null) {
-      statement.where((t) => t.generationId.equals(generationId));
-    }
-
     statement.orderBy([_ordering(sort)]);
     return statement;
   }
@@ -166,3 +150,9 @@ class PokemonDao extends DatabaseAccessor<AppDatabase>
     }
   }
 }
+
+/// Provides the [PokemonLocalDataSource], returning the abstract type so the
+/// repository provider depends on the interface (DIP).
+@riverpod
+PokemonLocalDataSource pokemonLocalDataSource(Ref ref) =>
+    PokemonDao(ref.watch(appDatabaseProvider));
