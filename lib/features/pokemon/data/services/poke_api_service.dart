@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:pokedex/core/network/dio_client.dart';
 import 'package:pokedex/features/pokemon/data/dtos/evolution_chain_dto.dart';
 import 'package:pokedex/features/pokemon/data/dtos/location_area_encounter_dto.dart';
 import 'package:pokedex/features/pokemon/data/dtos/pokemon_dto.dart';
@@ -6,6 +7,7 @@ import 'package:pokedex/features/pokemon/data/dtos/pokemon_list_response_dto.dar
 import 'package:pokedex/features/pokemon/data/dtos/pokemon_species_dto.dart';
 import 'package:pokedex/features/pokemon/data/dtos/type_dto.dart';
 import 'package:retrofit/retrofit.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'poke_api_service.g.dart';
 
@@ -48,3 +50,9 @@ abstract class PokeApiService {
   @GET('/pokemon/{id}/encounters')
   Future<List<LocationAreaEncounterDto>> getEncounters(@Path('id') int id);
 }
+
+/// The Retrofit-backed [PokeApiService] for the shared [Dio]. Stateless, so
+/// the default codegen lifecycle is fine — recreating it is free.
+@riverpod
+PokeApiService pokeApiService(Ref ref) =>
+    PokeApiService(ref.watch(dioProvider));

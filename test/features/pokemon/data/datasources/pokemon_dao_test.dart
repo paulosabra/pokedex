@@ -50,13 +50,11 @@ void main() {
     SortCriteria sort = SortCriteria.numberAsc,
     String? query,
     PokemonFilter? filter,
-    int? generationId,
   }) async {
     final rows = await dao.querySummaries(
       sort: sort,
       query: query,
       filter: filter,
-      generationId: generationId,
     );
     return rows.map((r) => r.id).toList();
   }
@@ -236,10 +234,6 @@ void main() {
       );
     });
 
-    test('by generation', () async {
-      expect(await ids(generationId: 2), [152]);
-    });
-
     test('by height bucket', () async {
       // short < 10 dm: bulbasaur(7), charmander(6), chikorita(9).
       expect(
@@ -289,17 +283,6 @@ void main() {
       );
     });
 
-    test('combined filters intersect (RN-08)', () async {
-      // grass type AND generation 1 → bulbasaur only (chikorita is gen 2).
-      expect(
-        await ids(
-          filter: const PokemonFilter(types: {PokemonTypeId.grass}),
-          generationId: 1,
-        ),
-        [1],
-      );
-    });
-
     test('a composed type + weakness + height filter intersects all', () async {
       // grass type AND weak-to-fire AND short height → bulbasaur only.
       expect(
@@ -315,10 +298,13 @@ void main() {
     });
 
     test('a zero-result intersection returns empty, not an error', () async {
+      // fire type AND tall height → none (charmander is fire but short).
       expect(
         await ids(
-          filter: const PokemonFilter(types: {PokemonTypeId.fire}),
-          generationId: 2,
+          filter: const PokemonFilter(
+            types: {PokemonTypeId.fire},
+            height: HeightCategory.tall,
+          ),
         ),
         isEmpty,
       );

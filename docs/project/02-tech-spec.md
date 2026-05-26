@@ -472,9 +472,15 @@ abstract interface class PokemonRepository {
   Future<Result<PokemonPage>>     getPokemonList({required int limit, required int offset});
   Future<Result<PokemonDetail>>   getPokemonDetail(int id);
   Future<Result<EvolutionChain>>  getEvolutionChain(int id);
-  Future<Result<List<Pokemon>>>   search(String query);          // RN-06/07
-  Future<Result<List<Pokemon>>>   filter(PokemonFilter filter);  // RF-14..17
-  Stream<List<Pokemon>>           watchCachedSummaries();        // reativo (Drift)
+  Future<Result<List<Pokemon>>>   findPokemon({                 // RN-06/07/08
+    required SortCriteria sort,
+    String? query,
+    PokemonFilter? filter,
+  });
+  Stream<List<Pokemon>>           watchCachedSummaries({        // reativo (Drift)
+    required SortCriteria sort,
+    PokemonFilter? filter,
+  });
 }
 ```
 

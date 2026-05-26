@@ -7,6 +7,9 @@ import 'package:pokedex/features/pokemon/data/dtos/pokemon_list_response_dto.dar
 import 'package:pokedex/features/pokemon/data/dtos/pokemon_species_dto.dart';
 import 'package:pokedex/features/pokemon/data/dtos/type_dto.dart';
 import 'package:pokedex/features/pokemon/data/services/poke_api_service.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
+
+part 'pokemon_remote_data_source.g.dart';
 
 /// Fetches raw DTOs from the PokéAPI, translating transport errors into the
 /// app's typed `Failure` vocabulary so the domain never sees a [DioException].
@@ -77,3 +80,9 @@ class PokemonRemoteDataSourceImpl implements PokemonRemoteDataSource {
     }
   }
 }
+
+/// Provides the [PokemonRemoteDataSource], returning the abstract type so
+/// callers depend on the interface (DIP).
+@riverpod
+PokemonRemoteDataSource pokemonRemoteDataSource(Ref ref) =>
+    PokemonRemoteDataSourceImpl(ref.watch(pokeApiServiceProvider));
