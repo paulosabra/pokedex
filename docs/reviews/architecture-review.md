@@ -1,282 +1,376 @@
-# Architecture Review — Domain layer epic (T-15 revision + T-16 + T-17)
+# Architecture Review — `feature/presentation-part1`
 
-**Branch:** `feature/domain-layer`
-**Scope:** Domain ring (5 use cases) + composition root (full Riverpod provider graph) + `go_router` wiring
-**Standard:** VGV layered architecture / Clean Architecture onion + dependency rule (DIP)
-**Plan:** `docs/plan/2026-05-26-feat-domain-layer-plan.md`
-**Reviewed:** 2026-05-26
+**Scope reviewed**: PR1 of the presentation-layer epic. Two architectural-level
+changes: (1) Design System kit under `lib/core/ui/components/` (6 stateless
+widgets) and (2) retroactive domain revision adding `int? generationId` to
+`PokemonFilter` with the matching DAO WHERE branch.
 
-This PR closes the Domain ring: five `class.call(...)` use cases over `PokemonRepository`, the
-T-15 retro-revision (`findPokemon` collapsing `search`/`filter`), and the first real composition
-root (`ProviderScope` + `MaterialApp.router` + the `dio→service→datasources→repo→use cases→router`
-provider graph). The architecture is sound; every Clean Architecture invariant the plan promised
-holds in code. One deliberate, plan-documented trade-off is noted (not a finding) and one minor
-observation is recorded.
+**Reviewer**: architecture-review-agent
+**Date**: 2026-05-26
+**Plan reference**: `docs/plan/2026-05-26-feat-presentation-layer-plan.md`
+**Verdict**: **Ready to merge** — architecture is clean. No critical or
+important issues. Three suggestions for forward consistency.
 
 ---
 
-## Layer Separation
+## 1. Layer Separation
 
-**Violations found in PR source: 0** (modulo the plan-documented co-location trade-off below).
+### Detected layers (single-package app, no monorepo)
 
-### Domain entity / repository purity — PASS
+The repo organizes responsibilities by directory rather than by Pub package:
 
-`grep -rE "package:(dio|drift|drift_flutter|retrofit|connectivity_plus|sqlite3_flutter_libs|flutter)/"`
-across `lib/features/pokemon/domain/**` returns nothing for hand-written files
-(`.g.dart`/`.freezed.dart` excluded). The `domain/entities/**` and `domain/repositories/**`
-surfaces remain infrastructure-free, matching the PR3 baseline. The domain repository interface
-(`lib/features/pokemon/domain/repositories/pokemon_repository.dart`) imports only
-`core/error/result.dart`, sibling `domain/entities/*.dart`, and nothing else — clean.
+| Layer (logical)              | Path                            | Allowed dependencies                                  |
+| ---------------------------- | ------------------------------- | ----------------------------------------------------- |
+| Cross-cutting kernel         | `lib/core/{error,network,database,pokemon}/` | Flutter SDK, 3p packages, sibling `core/` modules |
+| Design System                | `lib/core/ui/`                  | `core/` kernel, `app/theme/`, Flutter SDK, 3p UI deps |
+| App composition (theme/router) | `lib/app/{theme,router}/`     | `core/`, feature presentation entry points (router only) |
+| Feature — data               | `lib/features/pokemon/data/`    | `core/`, own `domain/` interfaces                     |
+| Feature — domain             | `lib/features/pokemon/domain/`  | `core/error`, `core/pokemon`                          |
+| Feature — presentation       | `lib/features/pokemon/presentation/` | `core/ui`, `app/theme`, own `domain/` (and current data DI pre-existing) |
 
-### Use case CLASSES depend only on the interface — PASS (DIP held)
+### Layer-separation findings
 
-Every use case constructor in `lib/features/pokemon/domain/usecases/*.dart` types its
-collaborator as the abstract `PokemonRepository`:
-
-| File | Constructor field type |
-| --- | --- |
-| `get_pokemon_list.dart:17` | `final PokemonRepository _repository;` |
-| `find_pokemon.dart:20` | `final PokemonRepository _repository;` |
-| `get_pokemon_detail.dart:17` | `final PokemonRepository _repository;` |
-| `get_evolution_chain.dart:16` | `final PokemonRepository _repository;` |
-| `watch_pokemon_list.dart:21` | `final PokemonRepository _repository;` |
-
-None reference `PokemonRepositoryImpl` from a typed position. DIP is preserved at the level
-that matters for substitutability (mocking in tests, swapping the impl in DI).
-
-### Use case PROVIDER FILES import the data layer — by design, not a violation
-
-The five files import `package:pokedex/features/pokemon/data/repositories/pokemon_repository_impl.dart`
-solely to reach `pokemonRepositoryProvider`:
-
-- `get_pokemon_list.dart:2`
-- `find_pokemon.dart:2`
-- `get_pokemon_detail.dart:2`
-- `get_evolution_chain.dart:2`
-- `watch_pokemon_list.dart:1`
-
-This is the deliberate trade-off the plan locks in (plan §"Architecture Notes" and "Datasource
-provider co-location"): providers live next to the wrapped concrete type; the abstract type is
-defined in the domain, so the provider can't sit there without inverting the wiring direction.
-The mitigations the plan promised are all present:
-
-1. Providers return the **abstract** type (`pokemonRepository(Ref) → PokemonRepository`,
-   `pokemonRemoteDataSource(Ref) → PokemonRemoteDataSource`,
-   `pokemonLocalDataSource(Ref) → PokemonLocalDataSource`). Verified at:
-   - `pokemon_repository_impl.dart:316-321`
-   - `pokemon_remote_data_source.dart:86-88`
-   - `pokemon_dao.dart:173-175`
-2. Static types on use case fields are the interface (above).
-3. The data import is _only_ used to read the provider symbol — `git grep -n
-   "PokemonRepositoryImpl\b" lib/features/pokemon/domain/` returns nothing.
-
-The cost is one acknowledged seam: domain provider _files_ touch the data import surface. The
-gain is convention consistency (every provider co-located with its wrapped type) and zero
-indirection for codegen. Standing trade-off; flagged here so the next reviewer doesn't
-re-litigate.
-
-### Presentation purity (placeholders) — PASS
-
-`lib/features/pokemon/presentation/pages/*.dart` imports `flutter/material.dart` and
-`go_router/go_router.dart`. No data-layer or domain-internal imports. The UI epic will introduce
-ViewModels reading use case providers; the foundation is clean.
-
-### Core layer purity — PASS
-
-`grep -rn "import 'package:pokedex/features" lib/core/` returns nothing. `core/` does not depend
-on any feature.
-
-### App layer purity — PASS for the composition root
-
-`lib/app/app.dart` and `lib/main.dart` depend only on `app/router/app_router.dart`,
-`app/theme/app_theme.dart`, and `flutter_riverpod`. `lib/app/router/app_router.dart` imports the
-two presentation pages directly — appropriate for a router config that names its destinations.
-
----
-
-## State Management Correctness (Riverpod 3 codegen)
-
-All providers use `@Riverpod` / `@riverpod` codegen, return the right type, and follow the
-plan's lifecycle policy.
-
-| Provider | File:line | Lifecycle | Justification |
-| --- | --- | --- | --- |
-| `dioProvider` | `core/network/dio_client.dart:21` | `keepAlive: true` | Socket pool / interceptors |
-| `appDatabaseProvider` | `core/database/app_database.dart:126` | `keepAlive: true` + `ref.onDispose(db.close)` | SQLite handle |
-| `connectivityProvider` | `core/network/connectivity_provider.dart:9` | `keepAlive: true` | Platform stream subscribers |
-| `routerProvider` | `app/router/app_router.dart:11` | `keepAlive: true` + `ref.onDispose(router.dispose)` | Nav history |
-| `pokeApiServiceProvider` | `data/services/poke_api_service.dart:56` | Default (`@riverpod`) | Stateless Retrofit wrapper |
-| `pokemonRemoteDataSourceProvider` | `data/datasources/pokemon_remote_data_source.dart:86` | Default | Stateless wrapper |
-| `pokemonLocalDataSourceProvider` | `data/datasources/pokemon_dao.dart:173` | Default | Stateless wrapper |
-| `pokemonRepositoryProvider` | `data/repositories/pokemon_repository_impl.dart:316` | Default | Stateless wrapper |
-| `getPokemonListProvider` | `domain/usecases/get_pokemon_list.dart:27` | Default | Stateless wrapper |
-| `findPokemonProvider` | `domain/usecases/find_pokemon.dart:32` | Default | Stateless wrapper |
-| `getPokemonDetailProvider` | `domain/usecases/get_pokemon_detail.dart:25` | Default | Stateless wrapper |
-| `getEvolutionChainProvider` | `domain/usecases/get_evolution_chain.dart:24` | Default | Stateless wrapper |
-| `watchPokemonListProvider` | `domain/usecases/watch_pokemon_list.dart:31` | Default | Stateless wrapper |
-
-Findings:
-
-- **`keepAlive` correctness — PASS.** All four resource-holders that the plan flags as
-  leak-risks (`dio`, `appDatabase`, `connectivity`, `router`) are marked `keepAlive: true`.
-  Stateless wrappers all use the default lifecycle. The boot widget test and the dedicated
-  `provider_graph_test` (per plan) are the runtime canary; static review confirms the
-  annotations.
-- **Disposal hooks — PASS.** Resources with explicit `close`/`dispose` semantics get
-  `ref.onDispose`:
-  - `appDatabaseProvider` → `ref.onDispose(db.close)` (`app_database.dart:129`).
-  - `routerProvider` → `ref.onDispose(router.dispose)` (`app_router.dart:27`).
-  Dio and Connectivity have no first-class close method exposed at this level; the `keepAlive`
-  alone is sufficient.
-- **`Ref` typing — PASS.** Hand-written providers use the unprefixed `Ref` parameter, and the
-  generated `*.g.dart` files declare `create(Ref ref)` (verified for `dio_client.g.dart:47` and
-  `app_router.g.dart:48`). This is the Riverpod 3 codegen pattern; no legacy `xRef` typedefs in
-  source.
-- **`part` directives and co-location — PASS.** Every annotated file has a matching
-  `part '<basename>.g.dart';` and the generated file exists on disk. Providers are co-located
-  with the wrapped type (or, in the case of `pokemonLocalDataSourceProvider`, with the wrapped
-  _concrete_ class `PokemonDao`, since the impl lives in a different file from its interface
-  — exactly as the plan documents).
-- **Use case classes — PASS.** Each is a `class` with one `call(...)`, the repo injected via
-  the constructor, no business logic beyond what the repo enforces. Asymmetric return type on
-  `WatchPokemonList` (`Stream<List<Pokemon>>`, no `Result`) is intentional and matches the
-  interface — verified at `watch_pokemon_list.dart:24-27`.
-
-No `Manager` / `Handler` / `Helper` god-class naming. No mutable state on use case classes
-(they hold a single `final` repo reference). Business logic location is correct: the use cases
-are pass-throughs; cache/online policy lives in `PokemonRepositoryImpl`.
-
----
-
-## Composition Root Correctness
-
-### Single `ProviderScope` at the top — PASS
-
-`grep -rn "ProviderScope" lib/` returns exactly one hit: `lib/main.dart:6`. No nested or
-duplicate scopes, no `ProviderScope.overrideWith` in production code. The boot pattern is the
-canonical `runApp(const ProviderScope(child: PokedexApp()));`.
-
-### `MaterialApp.router` wiring — PASS
-
-`lib/app/app.dart:14-18` uses `MaterialApp.router(routerConfig: ref.watch(routerProvider))`.
-The widget is a `ConsumerWidget` so `ref.watch` is legal. The router is read through the
-provider (single source of truth); no parallel `GoRouter` construction in `app.dart` or
-`main.dart`. The theme wiring from the foundation epic is preserved verbatim.
-
-### Router lifecycle — PASS
-
-`routerProvider` is `@Riverpod(keepAlive: true)` and disposes the router on container teardown
-via `ref.onDispose(router.dispose)` (`app_router.dart:27`). The combination matches the plan's
-named risk: a missing `keepAlive` would reset nav history on every rebuild; a missing dispose
-would leak the underlying listener. Both are guarded.
-
-### Routes — PASS
-
-Two routes, matching the plan exactly:
-
-- `/` → `PokemonListScreen()` (`app_router.dart:15-18`)
-- `/pokemon/:id` → `PokemonDetailScreen(id: int.parse(state.pathParameters['id']!))`
-  (`app_router.dart:19-24`)
-
-Deep-link parsing happens at the route boundary, not inside the screen — appropriate, since the
-screen receives an `int` and is testable without a router. `go_router_builder` is intentionally
-out of scope (no codegen pin risk).
-
----
-
-## Dependency Direction
+**All six new DS files** (`lib/core/ui/components/*.dart`) were scanned line by
+line. Every import is either Flutter SDK, an approved 3p (`cached_network_image`),
+the theme tokens in `lib/app/theme/`, the kernel-level `PokemonTypeId` in
+`lib/core/pokemon/`, or a sibling DS component. **Zero** imports from
+`package:pokedex/features/**` appear under `lib/core/ui/**`.
 
 ```
-main.dart
-  └── app/app.dart
-       ├── app/theme/app_theme.dart (core-free)
-       └── app/router/app_router.dart
-            └── features/pokemon/presentation/pages/*.dart
-                 └── (flutter/material + go_router only)
-
-domain/usecases/<each>.dart (classes)  ──depends on──>  domain/repositories/PokemonRepository
-domain/usecases/<each>.dart (providers) ──reads──>      data/repositories/pokemon_repository_impl.dart::pokemonRepositoryProvider
-
-data/repositories/pokemon_repository_impl.dart
-  └── data/datasources/{remote,dao}.dart  ──>  data/services/poke_api_service.dart  ──>  core/network/dio_client.dart
-       └──────────────────────────────────>  core/database/app_database.dart
-                       └─────────────────>  core/network/connectivity_provider.dart
-                       └─────────────────>  domain/entities/* (mapping target only)
-                       └─────────────────>  domain/repositories/pokemon_repository.dart (implements)
-
-core/** depends on nothing inside features/
+lib/core/ui/components/pokemon_card.dart      → app/theme, core/pokemon, sibling DS
+lib/core/ui/components/type_badge.dart        → app/theme, core/pokemon
+lib/core/ui/components/stat_bar.dart          → app/theme
+lib/core/ui/components/section_header.dart    → app/theme
+lib/core/ui/components/search_field.dart      → app/theme
+lib/core/ui/components/app_bottom_sheet.dart  → app/theme, sibling DS
 ```
 
-- **No cycles.** Verified by hand-tracing imports and by `grep -rn "import 'package:pokedex/features" lib/core/` returning empty.
-- **Domain interface → Data impl direction is correct.** `PokemonRepositoryImpl implements PokemonRepository` (`pokemon_repository_impl.dart:35`), `PokemonRemoteDataSourceImpl implements PokemonRemoteDataSource` (`pokemon_remote_data_source.dart:40`), `PokemonDao ... implements PokemonLocalDataSource` (`pokemon_dao.dart:27`). The dependency inversion is in the right direction at the type level.
-- **The one observed "upward" edge** is the plan-accepted import from `domain/usecases/*.dart`
-  to `data/repositories/pokemon_repository_impl.dart` (for the provider symbol). Class-level
-  types remain pointed at the interface; this is a wiring-file concession, not a structural
-  dependency on the impl. Already discussed in Layer Separation above.
+**Static guard** at `test/core/ui/import_boundary_test.dart` mirrors this rule
+in CI: it walks `lib/core/ui/**` and fails the build on any
+`package:pokedex/features/` import line. The guard is the right shape for the
+problem (convention rots; a one-line lint catches it instantly) and is
+correctly scoped to the subtree it protects. No false negatives observed: the
+file reads every `.dart`, skips none, and matches the `import` keyword at the
+trimmed line start.
+
+**No layer violations.**
+
+### Notes on the `app/` ↔ `core/` relationship
+
+Strict Clean Architecture would put `core/` below `app/` (kernel under
+composition root). This repo's `app/theme/` imports `core/pokemon/PokemonTypeId`
+(theme needs a stable enum to key colors on) — that's already established by
+the foundation epic and remains correct. The DS pulls **down and across**
+(`core/ui` → `app/theme` → `core/pokemon`), which is one direction only and
+forms no cycle. The plan's reasoning for keeping `PokemonTypeId` in `core/`
+specifically to keep this chain acyclic is sound and the PR honors it.
 
 ---
 
-## Package Structure
+## 2. Design System Placement — `lib/core/ui/` vs `lib/app/ui/`
 
-This is a single-package app (not a melos monorepo), so the package-level checklist degrades
-to module-level. Each layer keeps a single, clear responsibility:
+**Verdict**: correct call.
 
-- `core/` — shared infrastructure (error types, network plumbing, database, cross-cutting type
-  identity). Imports nothing from `features/`.
-- `features/pokemon/data/` — DTOs, mappers, services, datasources, repository impl, providers.
-  Imports `core/` and `domain/` (the latter for interfaces it implements and entities it maps
-  to).
-- `features/pokemon/domain/` — entities, repository interface, use cases. Hand-written domain
-  source files import only `core/error/*`, `core/pokemon/pokemon_type_id.dart`, sibling
-  domain files, and (in the use case provider lines only) the data repository file for the
-  provider symbol.
-- `features/pokemon/presentation/` — placeholder pages only. UI epic will add ViewModels and
-  state classes.
-- `app/` — composition root: theme, router, root widget, entry point.
+The plan's justification — that `PokemonTypeId` already lives at `lib/core/pokemon/`
+for the same cross-cutting reason — holds up under inspection. The DS satisfies
+the criteria for "core" placement:
 
-`pubspec.yaml` adds exactly one new dep (`go_router: ^17.2.3`); no codegen, no pin disruption
-(plan §"Pubspec validation"). The pinned analyzer-9 codegen set (`freezed: 3.2.5`,
-`riverpod_generator: 4.0.3`, `drift: 2.31.0`, `drift_dev: 2.31.0`, `retrofit_generator: 10.2.6`)
-is preserved verbatim, matching the project's `analyzer9-toolchain` memory.
+1. **Domain-agnostic**: every component takes primitives (`int id`, `String name`,
+   `PokemonTypeId primaryType`, …). None imports a domain entity. Replacing the
+   word "Pokémon" in the type signatures with "Card" would leave the components
+   compilable as a generic kit.
+2. **Reusable across features**: when the second feature lands (e.g., a future
+   "Trainers" area), DS components like `SectionHeader`, `SearchField`,
+   `AppBottomSheet`, `StatBar` would be drop-in.
+3. **No app-composition coupling**: nothing in `lib/core/ui/` reaches into
+   `lib/app/router/`, `lib/app/app.dart`, or any other composition root.
 
-> **Note:** the plan targeted `go_router: ^16.x`. The committed value is `^17.2.3`. The plan's
-> §"Resolved Open Questions" §1 explicitly accepts pin drift at execution time provided the
-> pinned codegen set isn't disturbed (and provided the resolved minor is recorded in the PR
-> description). Both conditions can be met here. Worth flagging in the PR body if not already
-> there.
+`lib/app/ui/` would be a worse home because `lib/app/` is becoming the
+composition root (router, MaterialApp, theme wiring, soon `layout/` in PR4).
+A DS kit doesn't belong in the composition root — it belongs underneath it
+where features and the composition root can both consume it.
 
----
-
-## Observations (not violations)
-
-1. **Use case provider file → data impl import (plan-accepted trade-off).** Five files, five
-   imports — already documented above. The current convention is locally consistent, plan-
-   documented, and not blocking. The cleanest alternative would be a `domain/usecases/_di.dart`
-   barrel that imports the data file once and re-exposes `pokemonRepositoryProvider` to the
-   use cases, but that adds indirection for no behavioural gain. Standing as-is is the right
-   call; record this so a future reviewer sees the reasoning rather than re-flagging it.
-2. **`go_router` version drift from `^16.x` to `^17.2.3`.** Codegen pins held (see Package
-   Structure note); functionally fine. Mention the resolved version in the PR body per the
-   plan's §"Resolved Open Questions" #1.
+**One forward-looking observation** (suggestion S1 below): when PR4 lands the
+error/empty state widgets, the plan correctly places them under
+`lib/core/ui/states/`. PR4 also introduces `lib/app/layout/` (breakpoints,
+responsive layout, master-detail) — the plan explicitly justifies that
+placement as app-level composition because the scaffold wires routes. That
+distinction is right: `core/ui/` is kit; `app/layout/` is composition.
 
 ---
 
-## Verdict
+## 3. Retroactive Domain Revision — `PokemonFilter.generationId`
 
-**Architecture is clean. Ready to merge.**
+**Verdict**: clean additive change. No migration risk, no coupling.
 
-- Layer separation: 0 violations. The five `domain/usecases → data/pokemon_repository_impl`
-  imports are the plan-accepted, plan-documented co-location trade-off; class-level types
-  remain on the abstract interface (DIP held).
-- State management: All providers correctly typed, correctly co-located, correct lifecycle
-  policy (`keepAlive: true` on the four resource-holders, default on stateless wrappers).
-  `ref.onDispose` present where it matters (db, router).
-- Dependency direction: One-way, no cycles. Core depends on nothing in features. Data
-  implements domain. Presentation depends on go_router only (no upward leak).
-- Composition root: One `ProviderScope` at `main.dart:6`. `MaterialApp.router` reads
-  `routerProvider` (single source of truth). Two routes wired per the plan.
-- Package structure: Modules have single responsibilities; pubspec adds one dep, codegen pins
-  untouched.
+### The change is minimal-surface and isomorphic to the existing path
 
-No critical or important issues. Two minor observations recorded above for PR-body / future-
-reviewer context.
+```dart
+// lib/features/pokemon/domain/entities/pokemon_filter.dart
+const factory PokemonFilter({
+  @Default(<PokemonTypeId>{}) Set<PokemonTypeId> types,
+  @Default(<PokemonTypeId>{}) Set<PokemonTypeId> weaknesses,
+  HeightCategory? height,
+  int? generationId,    // NEW — nullable, no default → backward-compatible
+}) = _PokemonFilter;
+```
+
+```dart
+// lib/features/pokemon/data/datasources/pokemon_dao.dart  (lines 119–122 added)
+final generationId = filter.generationId;
+if (generationId != null) {
+  statement.where((t) => t.generationId.equals(generationId));
+}
+```
+
+### Why this is not a coupling/migration risk
+
+1. **DB schema unchanged**. `lib/core/database/app_database.dart` line 27
+   already declared `IntColumn get generationId => integer()();` as part of the
+   foundation epic for exactly this purpose. No migration, no schema change,
+   no codegen risk for Drift.
+2. **Repository interface unchanged**.
+   `PokemonRepository.findPokemon({sort, query, filter})` and
+   `watchCachedSummaries({sort, filter})` already accept a `PokemonFilter?`.
+   Adding a field to the filter is a value-type extension — no method signature
+   moves.
+3. **All callers stay green**.
+   - Use case (`find_pokemon.dart`) is a pure pass-through; no change needed.
+   - Existing data-layer tests pass because `generationId` defaults to `null`
+     (nullable, no default literal) → the existing WHERE chain is unchanged
+     when callers don't set it.
+   - The added test in `pokemon_filter_test.dart` asserts the default is
+     `isNull` and `copyWith` works on the new field independently — defensive
+     and correct.
+4. **DAO change is appended in the right place**. The new WHERE branch sits
+   after `height`, inside the `if (filter != null)` guard, following the
+   same null-check pattern as the other predicates. No reordering or refactor
+   of existing logic.
+5. **Spec sync**. `docs/project/02-tech-spec.md` §8.2 was updated to mirror
+   the entity. The pattern matches the T-15 retroactive revision from the
+   domain epic and follows the same "spec change rides in the same PR as the
+   code change" convention.
+
+### Tests cover the seam
+
+- `test/features/pokemon/domain/entities/pokemon_filter_test.dart` — new
+  defaults and `copyWith` cases.
+- `test/features/pokemon/domain/usecases/find_pokemon_test.dart` — added a
+  "forwards a filter combining generationId with types" case, verifying the
+  use case forwards the new field verbatim.
+- `test/features/pokemon/data/datasources/pokemon_dao_test.dart` — fixture
+  rows now include `generationId: 2` (chikorita) so future WHERE-branch
+  assertions have data to bite into; the file scaffolds the new column
+  surface even where direct generation-WHERE assertions aren't yet wired in
+  every group (see Suggestion S2).
+
+**No risk identified.** The revision is small, isolated, and backwards
+compatible by design.
+
+---
+
+## 4. Dependency Direction
+
+### Graph of imports introduced by this PR
+
+```
+lib/core/ui/components/pokemon_card.dart
+  → lib/app/theme/{app_colors, app_typography, pokemon_type_theme}
+  → lib/core/pokemon/pokemon_type_id
+  → lib/core/ui/components/type_badge      (sibling, OK)
+  → package:cached_network_image, package:flutter/material
+
+lib/core/ui/components/type_badge.dart
+  → lib/app/theme/{app_typography, pokemon_type_theme}
+  → lib/core/pokemon/pokemon_type_id
+  → package:flutter/material
+
+(stat_bar, section_header, search_field, app_bottom_sheet — all subsets of the above)
+
+lib/features/pokemon/data/datasources/pokemon_dao.dart
+  → unchanged set of imports; only the WHERE branch is added
+
+lib/features/pokemon/domain/entities/pokemon_filter.dart
+  → unchanged imports; one field added
+```
+
+### Cycle check
+
+- `core/ui` → `app/theme` → `core/pokemon`. **Acyclic.**
+- `app/theme` does NOT depend on `core/ui` (verified by grep). **Acyclic.**
+- `features/pokemon/domain` does NOT depend on `core/ui`. **Acyclic.**
+- The PR adds no new edge that closes a cycle.
+
+### Pre-existing observation (not a PR1 regression)
+
+The domain use cases under `lib/features/pokemon/domain/usecases/` import
+`package:pokedex/features/pokemon/data/repositories/pokemon_repository_impl.dart`
+to construct their Riverpod providers (e.g., `ref.watch(pokemonRepositoryProvider)`).
+This is a domain-on-data import that exists in all five use case files and
+was introduced by the domain epic (commit `14da3a7`), not by this PR.
+
+**Status**: pre-existing, **not introduced by PR1**, and tracked in prior
+review reports. PR1 introduces no new violations of this kind. The domain
+use case ring still depends on `PokemonRepository` *interface* for its
+business logic; only the Riverpod wiring touches the concrete provider, which
+is a Riverpod-DI concession the team has already accepted. Flagging only so
+the team carries it forward when scoring this PR's dependency hygiene
+("no new violations; the existing domain→data wiring remains").
+
+### PR1 verdict
+
+**No new direction violations.** The new DS subtree imports cleanly downward.
+
+---
+
+## 5. Package / Subtree Structure
+
+This is a single-package Flutter app — no Pub workspaces. Treating
+`lib/core/ui/` as a logical "package":
+
+- [x] **Single responsibility**: design-system primitives. Six components,
+      each one widget per file, each one clear concern.
+- [x] **Test directory mirrors structure**:
+      `test/core/ui/components/{<name>_test.dart, goldens/<name>*.png}`.
+- [x] **No grab-bag risk**: each file is named for the one component it
+      exports.
+- [x] **No unnecessary dependencies**: `cached_network_image` is the only
+      new direct dep, justified by RF-01 imagery + offline-cached artwork.
+      `pubspec.yaml` adds it at `^3.4.1` and `pubspec.lock` (per the plan's
+      analyzer-9 pin guardrail) should be verified before merge — the plan
+      requires `dart pub deps --style=tree | grep -i analyzer` to confirm no
+      drift to `analyzer ^10`. Out of architectural scope, but flagging so
+      the toolchain memory is honored.
+- [x] **Const constructors used**: every component is `const` where
+      possible (`const PokemonCard({...})`, `const TypeBadge({...})`, etc.).
+- [x] **`super.key` pattern**: every public component uses
+      `super.key` (no manual key forwarding).
+- [x] **Doc comments on public API**: every public class, enum, and
+      parameter carries a `///` doc comment referencing the relevant RF/RN.
+- [x] **Lint guard exists**: `test/core/ui/import_boundary_test.dart`
+      mechanically enforces the boundary.
+
+### One minor structural note (no action required for PR1)
+
+The plan's target structure (`lib/core/ui/` subtree) anticipates a sibling
+`lib/core/ui/states/` directory in PR4. Today, only `components/` exists.
+This is the YAGNI cut the plan called for. No premature `barrel.dart`
+exports, no empty placeholder files — clean.
+
+---
+
+## 6. State Management
+
+**Not applicable to PR1.** The DS components are pure `StatelessWidget`s
+with no Riverpod imports, no Bloc, no `ChangeNotifier`. State will land in
+PR2 (`PokemonListViewModel`) and PR3 (`PokemonDetailViewModel`). The DS's
+stateless shape is what *enables* clean state-management hosting in those
+PRs — every widget takes its inputs via constructor parameters and emits
+events via `VoidCallback`/`ValueChanged<T>`. Reviewed and confirmed.
+
+---
+
+## 7. Consistency with the Epic Plan
+
+Spot-checked PR1 against the plan's PR1 acceptance criteria
+(`docs/plan/2026-05-26-feat-presentation-layer-plan.md` lines 432–457):
+
+| AC                                                                       | Status |
+| ------------------------------------------------------------------------ | ------ |
+| All 6 DS components implemented                                          | Yes    |
+| Type colors via `PokemonTypeTheme`; zero `Color(0xFF…)` literals in DS   | Yes — verified by grep across `lib/core/ui/components/*.dart` |
+| Components take primitive params; no `features/pokemon/domain/` imports  | Yes    |
+| Lint guard for `lib/core/ui/**` → `package:pokedex/features/**`          | Yes — `test/core/ui/import_boundary_test.dart` |
+| Golden test per component, self-baselined under `goldens/`               | Yes — 10 PNGs present, plus parameter-variation tests |
+| Parameter variation widget tests (TypeBadge × 18, StatBar × 4)           | Yes — present in the test files |
+| `PokemonFilter.generationId` added; DAO WHERE branch added               | Yes    |
+| Tech Spec §8.2 updated for `PokemonFilter`                                | Yes — diff includes the §8.2 snippet update |
+| All existing tests stay green (optional null field)                       | Yes — by construction (nullable, no default) |
+| Commit hygiene: split `refactor(domain)` from `feat(ui)`                  | Pending — PR not yet committed. The changes are staged in the working tree. Honor this when finalizing commits. |
+| PR description links Figma screenshots                                    | Pending — check at PR creation time. |
+
+The two pending items are PR-process concerns, not architecture concerns.
+
+---
+
+## 8. Verdict
+
+**Ready to merge from an architecture standpoint.**
+
+The PR is small, layered correctly, dependency-acyclic, and consistent with
+the epic plan. The Design System earns its `lib/core/ui/` placement; the
+retroactive domain revision is the minimum-surface change it claims to be.
+The CI-enforced import boundary is the right shape for the problem.
+
+| Category               | Count |
+| ---------------------- | ----- |
+| Critical               | 0     |
+| Important              | 0     |
+| Suggestions            | 3     |
+
+---
+
+## Suggestions (non-blocking)
+
+### S1 — Forward-document the `app/` ↔ `core/` relationship
+
+The current chain `core/ui → app/theme → core/pokemon` is acyclic and
+correct, but the directional reasoning isn't captured anywhere outside this
+review and the plan. A one-paragraph note at the top of `lib/core/ui/`
+(e.g., a `README.md` or a doc comment block in a future `barrel.dart`) would
+prevent a future contributor from "fixing" the perceived oddity of `core/`
+importing `app/theme/` by inverting it.
+
+**Action**: optional doc note in `lib/core/ui/` or `lib/app/theme/` calling
+out the convention. Not required for this PR; nice for PR2's adapter
+widgets which will reuse the same chain.
+
+### S2 — DAO test direct coverage for the new `generationId` WHERE branch
+
+The `pokemon_dao_test.dart` fixtures now include rows with non-default
+generations (e.g., chikorita with `generationId: 2`), but the diff did not
+add a dedicated test case that constructs a `PokemonFilter(generationId: 1)`
+(or `generationId: 5`) and asserts the row count. The plan's acceptance
+criteria call for "Add tests covering the new WHERE branch" (PR1 plan,
+`docs/plan/...:370`).
+
+A two-line case in the `'filters'` group of `pokemon_dao_test.dart`:
+
+```dart
+test('by generationId narrows to matching generation', () async {
+  expect(await ids(filter: const PokemonFilter(generationId: 2)), [152]);
+  expect(await ids(filter: const PokemonFilter(generationId: 5)), isEmpty);
+});
+```
+
+would close the loop and prevent regression if someone accidentally drops
+the WHERE branch in a future refactor.
+
+**Action**: add the direct WHERE-branch test case. Falls under PR1 ACs;
+worth catching before merge.
+
+### S3 — Capture the toolchain check for `cached_network_image`
+
+The plan calls for verifying that `cached_network_image ^3.4.1` does not
+pull `analyzer ^10` or `^12` transitively
+(`dart pub deps --style=tree | grep -i analyzer`) before pinning. This is a
+toolchain concern (memory: `project_analyzer9-toolchain`), not an
+architecture concern, but if the dep does pull a newer analyzer it will
+silently slide the freezed/riverpod codegen onto -dev prereleases — which
+*is* an architectural footgun (codegen instability propagates everywhere).
+
+**Action**: run the dep check before merging PR1. If the result is clean,
+the current caret pin is fine. If not, pin exact with a comment matching
+the existing drift/freezed pin notes.
+
+---
+
+## References
+
+- Plan: `docs/plan/2026-05-26-feat-presentation-layer-plan.md`
+- Brainstorm: `docs/brainstorm/2026-05-26-presentation-layer-brainstorm-doc.md`
+- Tech Spec: `docs/project/02-tech-spec.md` (§5 state, §8 entities, §10 theme)
+- Domain epic plan (for revision-pattern reference):
+  `docs/plan/2026-05-26-feat-domain-layer-plan.md`
+- Memory: `project_git-flow`, `project_analyzer9-toolchain`,
+  `feedback_review-reports-committed`
