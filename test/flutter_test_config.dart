@@ -19,13 +19,18 @@ import 'package:flutter_test/flutter_test.dart';
 const double _kGoldenDiffTolerance = 0.01; // 1%
 
 /// Entry point picked up automatically by `flutter_test` for every test under
-/// this directory. It wraps the default [LocalFileComparator] with a tolerant
-/// one so sub-pixel anti-aliasing noise no longer fails golden tests.
+/// this directory. It replaces the default zero-tolerance [LocalFileComparator]
+/// with a tolerant subclass that keeps each test file's own `goldens/`
+/// directory.
 Future<void> testExecutable(FutureOr<void> Function() testMain) async {
   final defaultComparator = goldenFileComparator;
   if (defaultComparator is LocalFileComparator) {
+    // `basedir` is @protected; reading it here is the only way to carry each
+    // test file's own `goldens/` directory into the tolerant comparator.
+    // ignore: invalid_use_of_protected_member
+    final goldensDir = defaultComparator.basedir;
     goldenFileComparator = _TolerantGoldenFileComparator(
-      defaultComparator,
+      goldensDir,
       tolerance: _kGoldenDiffTolerance,
     );
   }
@@ -33,33 +38,26 @@ Future<void> testExecutable(FutureOr<void> Function() testMain) async {
   await testMain();
 }
 
-/// Delegates all golden I/O to the wrapped [LocalFileComparator] but accepts a
-/// comparison whose pixel diff stays within [tolerance]. Anything above the
-/// threshold is handed back to the inner comparator, which throws the standard
-/// failure and writes the usual `failures/` diff artifacts.
-class _TolerantGoldenFileComparator extends GoldenFileComparator {
-  _TolerantGoldenFileComparator(this._inner, {required this.tolerance});
+/// A [LocalFileComparator] that passes when the pixel diff stays within the
+/// configured tolerance. Anything above the threshold is deferred to the
+/// default comparison, which throws the standard failure and writes the usual
+/// `failures/` diff artifacts.
+class _TolerantGoldenFileComparator extends LocalFileComparator {
+  _TolerantGoldenFileComparator(super.testFile, {required this.tolerance});
 
-  final LocalFileComparator _inner;
   final double tolerance;
 
   @override
   Future<bool> compare(Uint8List imageBytes, Uri golden) async {
     final result = await GoldenFileComparator.compareLists(
       imageBytes,
-      await _inner.getGoldenBytes(golden),
+      await getGoldenBytes(golden),
     );
 
     if (result.passed || result.diffPercent <= tolerance) {
       return true;
     }
 
-    // Over the tolerance: let the default comparator produce the canonical
-    // error message and the usual `failures/` diff artifacts.
-    return _inner.compare(imageBytes, golden);
+    return super.compare(imageBytes, golden);
   }
-
-  @override
-  Future<void> update(Uri golden, Uint8List imageBytes) =>
-      _inner.update(golden, imageBytes);
 }
