@@ -32,6 +32,7 @@ void main() {
     PokemonTypeId? secondary,
     int generationId = 1,
     int height = 7,
+    int weight = 0,
     int weaknessMask = 0,
   }) => PokemonSummariesCompanion.insert(
     id: Value(id),
@@ -43,6 +44,7 @@ void main() {
     payloadJson: '{}',
     updatedAt: 0,
     secondaryTypeId: Value(secondary?.index),
+    weight: Value(weight),
     weaknessMask: Value(weaknessMask),
   );
 
@@ -364,6 +366,85 @@ void main() {
       expect(
         await ids(filter: const PokemonFilter(height: HeightCategory.tall)),
         [20],
+      );
+    });
+  });
+
+  group('by weight bucket', () {
+    setUp(() async {
+      await dao.upsertSummaries([
+        // pikachu @ 60 hg (light), pidgeot @ 395 hg (normal), snorlax @ 4600 hg
+        // (heavy).
+        summary(
+          id: 25,
+          name: 'pikachu',
+          primary: PokemonTypeId.electric,
+          weight: 60,
+        ),
+        summary(
+          id: 18,
+          name: 'pidgeot',
+          primary: PokemonTypeId.normal,
+          weight: 395,
+        ),
+        summary(
+          id: 143,
+          name: 'snorlax',
+          primary: PokemonTypeId.normal,
+          weight: 4600,
+        ),
+      ]);
+    });
+
+    test('WeightCategory.light returns only sub-100hg rows', () async {
+      expect(
+        await ids(filter: const PokemonFilter(weight: WeightCategory.light)),
+        [25],
+      );
+    });
+
+    test('WeightCategory.normal returns 100..499hg rows', () async {
+      expect(
+        await ids(filter: const PokemonFilter(weight: WeightCategory.normal)),
+        [18],
+      );
+    });
+
+    test('WeightCategory.heavy returns >=500hg rows', () async {
+      expect(
+        await ids(filter: const PokemonFilter(weight: WeightCategory.heavy)),
+        [143],
+      );
+    });
+  });
+
+  group('weight bucket boundaries', () {
+    // id == weight so the boundary values are easy to read in expectations.
+    setUp(() async {
+      await dao.upsertSummaries([
+        for (final w in [99, 100, 499, 500])
+          summary(id: w, name: 'w$w', primary: PokemonTypeId.normal, weight: w),
+      ]);
+    });
+
+    test('light is weight < 100 (100 is excluded)', () async {
+      expect(
+        await ids(filter: const PokemonFilter(weight: WeightCategory.light)),
+        [99],
+      );
+    });
+
+    test('normal is 100..499 inclusive', () async {
+      expect(
+        await ids(filter: const PokemonFilter(weight: WeightCategory.normal)),
+        [100, 499],
+      );
+    });
+
+    test('heavy is weight >= 500 (500 is included)', () async {
+      expect(
+        await ids(filter: const PokemonFilter(weight: WeightCategory.heavy)),
+        [500],
       );
     });
   });

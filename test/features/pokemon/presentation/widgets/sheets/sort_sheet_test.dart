@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/sheets/sort_sheet.dart';
 
@@ -84,6 +85,25 @@ void main() {
       final result = await handle.result;
       expect(result, SortCriteria.nameAsc);
     });
+
+    testWidgets(
+      'visually highlights the initial selection via Material color',
+      (tester) async {
+        await _openSheet(tester, initial: SortCriteria.nameAsc);
+
+        Material materialFor(String label) => tester.widget<Material>(
+          find
+              .ancestor(of: find.text(label), matching: find.byType(Material))
+              .first,
+        );
+
+        // The active row uses the primary accent fill; peers stay in the
+        // secondary unselected fill. A regression that always rendered every
+        // row as unselected would flip both branches and fail this assertion.
+        expect(materialFor('A-Z').color, AppColors.actionPrimary);
+        expect(materialFor('Z-A').color, AppColors.backgroundInput);
+      },
+    );
 
     testWidgets('drag-to-dismiss pops null', (tester) async {
       final handle = await _openSheet(

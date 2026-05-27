@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
+import 'package:pokedex/app/theme/height_weight_theme.dart';
 import 'package:pokedex/app/theme/pokemon_type_theme.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
 import 'package:pokedex/core/ui/components/app_bottom_sheet.dart';
@@ -192,9 +193,6 @@ class _TypeIconGrid extends StatelessWidget {
       ],
     );
   }
-
-  String _titleCase(String name) =>
-      '${name[0].toUpperCase()}${name.substring(1)}';
 }
 
 class _HeightPicker extends StatelessWidget {
@@ -203,42 +201,21 @@ class _HeightPicker extends StatelessWidget {
   final HeightCategory? value;
   final ValueChanged<HeightCategory?> onChanged;
 
-  /// Figma `Height / *` colors (Components page).
-  static const _styles = <HeightCategory, ({String asset, Color color})>{
-    HeightCategory.short: (
-      asset: 'assets/icons/heights/short.svg',
-      color: Color(0xFFFFC5E6),
-    ),
-    HeightCategory.medium: (
-      asset: 'assets/icons/heights/medium.svg',
-      color: Color(0xFFAEBFD7),
-    ),
-    HeightCategory.tall: (
-      asset: 'assets/icons/heights/tall.svg',
-      color: Color(0xFFAAACB8),
-    ),
-  };
-
-  static const _labels = <HeightCategory, String>{
-    HeightCategory.short: 'Short',
-    HeightCategory.medium: 'Medium',
-    HeightCategory.tall: 'Tall',
-  };
-
   @override
   Widget build(BuildContext context) {
+    const categories = HeightCategory.values;
     return Row(
       children: [
-        for (final entry in _styles.entries) ...[
+        for (final category in categories) ...[
           _FilterIconButton(
-            key: Key('height-${entry.key.name}'),
-            asset: entry.value.asset,
-            color: entry.value.color,
-            selected: value == entry.key,
-            semanticLabel: _labels[entry.key]!,
-            onTap: () => onChanged(value == entry.key ? null : entry.key),
+            key: Key('height-${category.name}'),
+            asset: 'assets/icons/heights/${category.name}.svg',
+            color: HeightWeightTheme.colorForHeight(category),
+            selected: value == category,
+            semanticLabel: _titleCase(category.name),
+            onTap: () => onChanged(value == category ? null : category),
           ),
-          if (entry.key != _styles.keys.last) const SizedBox(width: 12),
+          if (category != categories.last) const SizedBox(width: 12),
         ],
       ],
     );
@@ -251,47 +228,29 @@ class _WeightPicker extends StatelessWidget {
   final WeightCategory? value;
   final ValueChanged<WeightCategory?> onChanged;
 
-  /// Figma `Weight / *` colors (Components page).
-  static const _styles = <WeightCategory, ({String asset, Color color})>{
-    WeightCategory.light: (
-      asset: 'assets/icons/weights/light.svg',
-      color: Color(0xFF99CD7C),
-    ),
-    WeightCategory.normal: (
-      asset: 'assets/icons/weights/normal.svg',
-      color: Color(0xFF57B2DC),
-    ),
-    WeightCategory.heavy: (
-      asset: 'assets/icons/weights/heavy.svg',
-      color: Color(0xFF5A92A5),
-    ),
-  };
-
-  static const _labels = <WeightCategory, String>{
-    WeightCategory.light: 'Light',
-    WeightCategory.normal: 'Normal',
-    WeightCategory.heavy: 'Heavy',
-  };
-
   @override
   Widget build(BuildContext context) {
+    const categories = WeightCategory.values;
     return Row(
       children: [
-        for (final entry in _styles.entries) ...[
+        for (final category in categories) ...[
           _FilterIconButton(
-            key: Key('weight-${entry.key.name}'),
-            asset: entry.value.asset,
-            color: entry.value.color,
-            selected: value == entry.key,
-            semanticLabel: _labels[entry.key]!,
-            onTap: () => onChanged(value == entry.key ? null : entry.key),
+            key: Key('weight-${category.name}'),
+            asset: 'assets/icons/weights/${category.name}.svg',
+            color: HeightWeightTheme.colorForWeight(category),
+            selected: value == category,
+            semanticLabel: _titleCase(category.name),
+            onTap: () => onChanged(value == category ? null : category),
           ),
-          if (entry.key != _styles.keys.last) const SizedBox(width: 12),
+          if (category != categories.last) const SizedBox(width: 12),
         ],
       ],
     );
   }
 }
+
+String _titleCase(String name) =>
+    '${name[0].toUpperCase()}${name.substring(1)}';
 
 /// A 50×50 pill-shaped filter toggle — the shared visual for Types,
 /// Weaknesses, Heights, and Weights.

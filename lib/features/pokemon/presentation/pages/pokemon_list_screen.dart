@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
+import 'package:pokedex/core/ui/components/pokemon_card.dart' as core;
 import 'package:pokedex/core/ui/components/search_field.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
 import 'package:pokedex/features/pokemon/presentation/state/pokemon_list_state.dart';
@@ -249,7 +250,6 @@ class _Body extends ConsumerWidget {
       // Pure error with no previous data; PR4 will swap this for a richer
       // error widget. For PR2 we render a minimal message + retry.
       return _ErrorBlock(
-        error: async.error,
         onRetry: () =>
             ref.read(pokemonListViewModelProvider.notifier).refresh(),
       );
@@ -305,7 +305,7 @@ class _SkeletonList extends StatelessWidget {
       itemCount: 4,
       separatorBuilder: (_, _) => const SizedBox(height: 15),
       itemBuilder: (_, _) => Container(
-        height: 115,
+        height: core.PokemonCard.height,
         decoration: BoxDecoration(
           color: AppColors.backgroundInput,
           borderRadius: BorderRadius.circular(10),
@@ -345,9 +345,8 @@ class _EmptyBlock extends StatelessWidget {
 }
 
 class _ErrorBlock extends StatelessWidget {
-  const _ErrorBlock({required this.error, required this.onRetry});
+  const _ErrorBlock({required this.onRetry});
 
-  final Object? error;
   final VoidCallback onRetry;
 
   @override

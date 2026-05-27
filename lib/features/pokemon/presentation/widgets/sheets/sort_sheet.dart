@@ -11,18 +11,13 @@ import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
 /// (unselected, `#F2F2F2`) tokens from frame `268:176`. Tapping a button
 /// selects the criterion and pops the sheet with that value — there is no
 /// explicit Apply button in the design (tap = apply). UC-04.
-class SortSheet extends StatefulWidget {
+class SortSheet extends StatelessWidget {
   /// Creates a [SortSheet] preloaded with [initial].
   const SortSheet({required this.initial, super.key});
 
   /// The currently active sort criterion.
   final SortCriteria initial;
 
-  @override
-  State<SortSheet> createState() => _SortSheetState();
-}
-
-class _SortSheetState extends State<SortSheet> {
   static const _labels = <SortCriteria, String>{
     SortCriteria.numberAsc: 'Smallest number first',
     SortCriteria.numberDesc: 'Highest number first',
@@ -42,7 +37,7 @@ class _SortSheetState extends State<SortSheet> {
           for (final entry in _labels.entries) ...[
             _SortButton(
               label: entry.value,
-              selected: widget.initial == entry.key,
+              selected: initial == entry.key,
               onTap: () => Navigator.of(context).pop<SortCriteria>(entry.key),
             ),
             if (entry.key != _labels.keys.last) const SizedBox(height: 20),

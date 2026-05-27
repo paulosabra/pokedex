@@ -102,25 +102,35 @@ class PokemonListViewModel extends _$PokemonListViewModel {
   }
 
   /// UC-03: applies (or clears, with `null`) the filter and re-evaluates mode.
+  ///
+  /// Short-circuits on identity updates so a sheet that pops the same filter
+  /// (e.g. user re-confirms the active selection) does not re-fire findPokemon
+  /// and flash AsyncLoading over an unchanged result set.
   void applyFilter(PokemonFilter? filter) {
     final current = state.value;
-    if (current == null) return;
+    if (current == null || current.filter == filter) return;
     state = AsyncData(current.copyWith(filter: filter));
     _applyMode();
   }
 
   /// UC-04: switches sort criterion and re-evaluates mode.
+  ///
+  /// Same identity-update guard as [applyFilter] — tapping the already-selected
+  /// sort in the sheet is a no-op rather than a redundant cache hit.
   void changeSort(SortCriteria sort) {
     final current = state.value;
-    if (current == null) return;
+    if (current == null || current.sort == sort) return;
     state = AsyncData(current.copyWith(sort: sort));
     _applyMode();
   }
 
   /// UC-05: picks (or clears, with `null`) the active generation.
+  ///
+  /// Same identity-update guard as [applyFilter] — re-selecting the active
+  /// generation (or clearing when already cleared) is a no-op.
   void selectGeneration(int? id) {
     final current = state.value;
-    if (current == null) return;
+    if (current == null || current.generationId == id) return;
     state = AsyncData(current.copyWith(generationId: id));
     _applyMode();
   }

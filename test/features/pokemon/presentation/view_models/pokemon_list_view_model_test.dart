@@ -630,6 +630,83 @@ void main() {
     });
   });
 
+  group('PokemonListViewModel — identity-update guards', () {
+    test(
+      'applyFilter with the active filter value does not re-run findPokemon',
+      () async {
+        await pumpInitial();
+        const fire = PokemonFilter(types: {PokemonTypeId.fire});
+
+        container.read(pokemonListViewModelProvider.notifier).applyFilter(fire);
+        await Future<void>.delayed(Duration.zero);
+        clearInteractions(findPokemon);
+
+        container.read(pokemonListViewModelProvider.notifier).applyFilter(fire);
+        await Future<void>.delayed(Duration.zero);
+
+        verifyNever(
+          () => findPokemon.call(
+            sort: any(named: 'sort'),
+            query: any(named: 'query'),
+            filter: any(named: 'filter'),
+          ),
+        );
+      },
+    );
+
+    test(
+      'changeSort with the active criterion does not re-run findPokemon',
+      () async {
+        await pumpInitial();
+
+        container
+            .read(pokemonListViewModelProvider.notifier)
+            .changeSort(SortCriteria.nameAsc);
+        await Future<void>.delayed(Duration.zero);
+        clearInteractions(findPokemon);
+
+        container
+            .read(pokemonListViewModelProvider.notifier)
+            .changeSort(SortCriteria.nameAsc);
+        await Future<void>.delayed(Duration.zero);
+
+        verifyNever(
+          () => findPokemon.call(
+            sort: any(named: 'sort'),
+            query: any(named: 'query'),
+            filter: any(named: 'filter'),
+          ),
+        );
+      },
+    );
+
+    test(
+      'selectGeneration with the active id does not re-run findPokemon',
+      () async {
+        await pumpInitial();
+
+        container
+            .read(pokemonListViewModelProvider.notifier)
+            .selectGeneration(2);
+        await Future<void>.delayed(Duration.zero);
+        clearInteractions(findPokemon);
+
+        container
+            .read(pokemonListViewModelProvider.notifier)
+            .selectGeneration(2);
+        await Future<void>.delayed(Duration.zero);
+
+        verifyNever(
+          () => findPokemon.call(
+            sort: any(named: 'sort'),
+            query: any(named: 'query'),
+            filter: any(named: 'filter'),
+          ),
+        );
+      },
+    );
+  });
+
   group(
     'PokemonListViewModel — _composeFilter (PR1 groundwork × PR2 wiring)',
     () {

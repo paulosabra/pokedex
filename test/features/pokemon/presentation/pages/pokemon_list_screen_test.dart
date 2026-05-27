@@ -17,6 +17,9 @@ import 'package:pokedex/features/pokemon/presentation/pages/pokemon_list_screen.
 import 'package:pokedex/features/pokemon/presentation/view_models/pokemon_list_view_model.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/pokemon_card.dart'
     as adapter;
+import 'package:pokedex/features/pokemon/presentation/widgets/sheets/filters_sheet.dart';
+import 'package:pokedex/features/pokemon/presentation/widgets/sheets/generations_sheet.dart';
+import 'package:pokedex/features/pokemon/presentation/widgets/sheets/sort_sheet.dart';
 
 class _MockGetPokemonList extends Mock implements GetPokemonList {}
 
@@ -243,5 +246,71 @@ void main() {
     // dedicated empty/error widgets under `lib/core/ui/states/`. Verifying
     // the PR2 placeholder here requires draining an uncaught zone error from
     // the failed build, which makes the test noisy and brittle.
+  });
+
+  // Closes the "screen-level wiring from icon buttons to sheet openers is
+  // entirely uncovered" gap from the PR2 test-quality review. Each test taps
+  // the tooltip-keyed icon, settles the showModalBottomSheet animation, and
+  // asserts the corresponding sheet is in the tree.
+  group('PokemonListScreen — sheet openers', () {
+    testWidgets('tapping the Filters icon opens FiltersSheet', (tester) async {
+      final harness = _makeHarness(firstPage: _page(1, 3));
+      await _pumpScreen(tester, harness: harness);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Filters'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(FiltersSheet), findsOneWidget);
+    });
+
+    testWidgets('tapping the Sort icon opens SortSheet', (tester) async {
+      final harness = _makeHarness(firstPage: _page(1, 3));
+      await _pumpScreen(tester, harness: harness);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Sort'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SortSheet), findsOneWidget);
+    });
+
+    testWidgets('tapping the Generations icon opens GenerationsSheet', (
+      tester,
+    ) async {
+      final harness = _makeHarness(firstPage: _page(1, 3));
+      await _pumpScreen(tester, harness: harness);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Generations'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(GenerationsSheet), findsOneWidget);
+    });
+
+    testWidgets(
+      'selecting a sort option dispatches changeSort to the ViewModel',
+      (tester) async {
+        final harness = _makeHarness(firstPage: _page(1, 3));
+        await _pumpScreen(tester, harness: harness);
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byTooltip('Sort'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Z-A'));
+        await tester.pumpAndSettle();
+
+        // The Sort dispatch flips to discovery, which routes through
+        // findPokemon. The VM-level test covers the state change; this one
+        // proves the screen wired the sheet result into the intent.
+        verify(
+          () => harness.findPokemon.call(
+            sort: SortCriteria.nameDesc,
+            query: any(named: 'query'),
+            filter: any(named: 'filter'),
+          ),
+        ).called(1);
+      },
+    );
   });
 }

@@ -21,18 +21,13 @@ typedef GenerationsSheetResult = ({int? value});
 /// drop shadow; unselected tiles use `#F2F2F2`. Tapping a tile pops the sheet
 /// with the chosen generation id; tapping the active tile clears the filter
 /// (UC-05).
-class GenerationsSheet extends StatefulWidget {
+class GenerationsSheet extends StatelessWidget {
   /// Creates a [GenerationsSheet] preloaded with [initial].
   const GenerationsSheet({this.initial, super.key});
 
   /// The currently active generation id, or `null` for no filter.
   final int? initial;
 
-  @override
-  State<GenerationsSheet> createState() => _GenerationsSheetState();
-}
-
-class _GenerationsSheetState extends State<GenerationsSheet> {
   /// Roman-numeral labels for the eight published generations, matching the
   /// Figma component names (`Generation / I`..`Generation / VIII`).
   static const _labels = <int, String>{
@@ -59,25 +54,28 @@ class _GenerationsSheetState extends State<GenerationsSheet> {
     8: [810, 813, 816],
   };
 
-  void _select(int id) {
-    final wasActive = widget.initial == id;
+  void _select(BuildContext context, int id) {
+    final wasActive = initial == id;
     Navigator.of(
       context,
     ).pop<GenerationsSheetResult>((value: wasActive ? null : id));
   }
 
-  void _clear() {
+  void _clear(BuildContext context) {
     Navigator.of(context).pop<GenerationsSheetResult>((value: null));
   }
 
   @override
   Widget build(BuildContext context) {
-    final hasActive = widget.initial != null;
+    final hasActive = initial != null;
     return AppBottomSheet(
       title: 'Generations',
       subtitle: 'Use search for generations to explore your Pokémon!',
       titleTrailing: hasActive
-          ? TextButton(onPressed: _clear, child: const Text('Clear'))
+          ? TextButton(
+              onPressed: () => _clear(context),
+              child: const Text('Clear'),
+            )
           : null,
       child: GridView.builder(
         shrinkWrap: true,
@@ -92,12 +90,12 @@ class _GenerationsSheetState extends State<GenerationsSheet> {
         itemCount: _labels.length,
         itemBuilder: (context, index) {
           final entry = _labels.entries.elementAt(index);
-          final isSelected = widget.initial == entry.key;
+          final isSelected = initial == entry.key;
           return _GenerationCard(
             label: entry.value,
             starterIds: _starters[entry.key]!,
             selected: isSelected,
-            onTap: () => _select(entry.key),
+            onTap: () => _select(context, entry.key),
           );
         },
       ),
