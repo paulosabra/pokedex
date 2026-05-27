@@ -27,7 +27,7 @@ Future<void> testExecutable(FutureOr<void> Function() testMain) async {
   if (defaultComparator is LocalFileComparator) {
     // `basedir` is @protected; reading it here is the only way to carry each
     // test file's own `goldens/` directory into the tolerant comparator.
-    // ignore: invalid_use_of_protected_member
+
     final goldensDir = defaultComparator.basedir;
     goldenFileComparator = _TolerantGoldenFileComparator(
       goldensDir,
