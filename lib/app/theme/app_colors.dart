@@ -30,4 +30,9 @@ abstract final class AppColors {
   /// Modal scrim over sheets — black at 25% opacity (Figma Style Guide
   /// `$background-modal`, frame `326:64`).
   static const Color backgroundModal = Color(0x40000000);
+
+  /// Selected / primary-action accent. Figma's "Type / Psychic" tone reused
+  /// as the selected-button fill on the Sort and Generations sheets
+  /// (frames `268:244` and `105:739`).
+  static const Color actionPrimary = Color(0xFFEA5D60);
 }

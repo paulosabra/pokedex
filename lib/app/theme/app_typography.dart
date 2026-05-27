@@ -32,7 +32,16 @@ abstract final class AppTypography {
     color: AppColors.textGray,
   );
 
-  /// Filter sheet titles.
+  /// Bottom-sheet header title — "Sort" / "Generations" / "Filters"
+  /// (Figma frames `268:242` / `268:314` — 26pt Bold).
+  static const TextStyle sheetTitle = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 26,
+    fontWeight: FontWeight.w700,
+    color: AppColors.textBlack,
+  );
+
+  /// In-sheet section titles ("Types", "Weaknesses", "Heights"). 16pt Bold.
   static const TextStyle filterTitle = TextStyle(
     fontFamily: fontFamily,
     fontSize: 16,

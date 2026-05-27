@@ -14,6 +14,12 @@ const _shortMaxDecimetres = 10;
 /// Lower bound (inclusive) in decimetres for [HeightCategory.tall] (≥ 2.0 m).
 const _tallMinDecimetres = 20;
 
+/// Upper bound (exclusive) in hectograms for [WeightCategory.light] (< 10 kg).
+const _lightMaxHectograms = 100;
+
+/// Lower bound (inclusive) in hectograms for [WeightCategory.heavy] (≥ 50 kg).
+const _heavyMinHectograms = 500;
+
 /// Matches all digits, used to disambiguate number search from name search.
 final _allDigits = RegExp(r'^\d+$');
 
@@ -116,6 +122,10 @@ class PokemonDao extends DatabaseAccessor<AppDatabase>
       if (height != null) {
         statement.where((t) => _heightPredicate(t, height));
       }
+      final weight = filter.weight;
+      if (weight != null) {
+        statement.where((t) => _weightPredicate(t, weight));
+      }
       final generationId = filter.generationId;
       if (generationId != null) {
         statement.where((t) => t.generationId.equals(generationId));
@@ -138,6 +148,21 @@ class PokemonDao extends DatabaseAccessor<AppDatabase>
             t.height.isSmallerThanValue(_tallMinDecimetres);
       case HeightCategory.tall:
         return t.height.isBiggerOrEqualValue(_tallMinDecimetres);
+    }
+  }
+
+  Expression<bool> _weightPredicate(
+    $PokemonSummariesTable t,
+    WeightCategory category,
+  ) {
+    switch (category) {
+      case WeightCategory.light:
+        return t.weight.isSmallerThanValue(_lightMaxHectograms);
+      case WeightCategory.normal:
+        return t.weight.isBiggerOrEqualValue(_lightMaxHectograms) &
+            t.weight.isSmallerThanValue(_heavyMinHectograms);
+      case WeightCategory.heavy:
+        return t.weight.isBiggerOrEqualValue(_heavyMinHectograms);
     }
   }
 
