@@ -495,12 +495,14 @@ void main() {
         summaryToCompanion(
           bulbasaur,
           heightDecimetres: 7,
+          weightHectograms: 69,
           weaknessMask: 0,
           nowMs: nowMs(),
         ),
         summaryToCompanion(
           charmander,
           heightDecimetres: 7,
+          weightHectograms: 85,
           weaknessMask: 0,
           nowMs: nowMs(),
         ),

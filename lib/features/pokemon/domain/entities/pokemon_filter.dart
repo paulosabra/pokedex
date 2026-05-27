@@ -17,6 +17,21 @@ enum HeightCategory {
   tall,
 }
 
+/// Weight buckets for the weight filter, parallel to [HeightCategory] —
+/// surfaced as a dedicated section on the Filters sheet per the Figma design
+/// system (Components page, `Weight / *` symbols). Concrete hectogram
+/// thresholds live in the data layer.
+enum WeightCategory {
+  /// Lighter Pokémon (under ~10 kg).
+  light,
+
+  /// Mid-weight Pokémon (~10–50 kg).
+  normal,
+
+  /// Heavier Pokémon (~50 kg and above).
+  heavy,
+}
+
 /// The set of active list filters. Filters combine as an intersection and are
 /// applied on top of the active search (RN-08).
 @freezed
@@ -26,6 +41,7 @@ abstract class PokemonFilter with _$PokemonFilter {
     @Default(<PokemonTypeId>{}) Set<PokemonTypeId> types,
     @Default(<PokemonTypeId>{}) Set<PokemonTypeId> weaknesses,
     HeightCategory? height,
+    WeightCategory? weight,
     int? generationId,
   }) = _PokemonFilter;
 }

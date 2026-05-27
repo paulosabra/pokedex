@@ -24,6 +24,7 @@ void main() {
       final companion = summaryToCompanion(
         pokemon,
         heightDecimetres: 7,
+        weightHectograms: 69,
         weaknessMask: 5,
         nowMs: 100,
       );
@@ -34,6 +35,7 @@ void main() {
       expect(companion.secondaryTypeId.value, PokemonTypeId.poison.index);
       expect(companion.generationId.value, 1);
       expect(companion.height.value, 7);
+      expect(companion.weight.value, 69);
       expect(companion.weaknessMask.value, 5);
       expect(companion.updatedAt.value, 100);
     });
@@ -42,6 +44,7 @@ void main() {
       final companion = summaryToCompanion(
         pokemon,
         heightDecimetres: 7,
+        weightHectograms: 69,
         weaknessMask: 5,
         nowMs: 100,
       );
@@ -53,6 +56,7 @@ void main() {
         secondaryTypeId: PokemonTypeId.poison.index,
         generationId: 1,
         height: 7,
+        weight: 69,
         weaknessMask: 5,
         payloadJson: companion.payloadJson.value,
         updatedAt: 100,
@@ -69,6 +73,7 @@ void main() {
       final companion = summaryToCompanion(
         pikachu,
         heightDecimetres: 4,
+        weightHectograms: 60,
         weaknessMask: 0,
         nowMs: 1,
       );

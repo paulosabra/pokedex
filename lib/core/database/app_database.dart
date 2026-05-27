@@ -29,6 +29,9 @@ class PokemonSummaries extends Table {
   /// Raw PokéAPI height in decimetres.
   IntColumn get height => integer()();
 
+  /// Raw PokéAPI weight in hectograms.
+  IntColumn get weight => integer().withDefault(const Constant(0))();
+
   /// 18-bit weakness bitmask (bit i = `PokemonTypeId.values[i]`, RF-15).
   /// Populated by the repository in PR3; defaults to 0 until then.
   IntColumn get weaknessMask => integer().withDefault(const Constant(0))();
@@ -105,11 +108,19 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
-  MigrationStrategy get migration =>
-      MigrationStrategy(onCreate: (m) => m.createAll());
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (m) => m.createAll(),
+    onUpgrade: (m, from, to) async {
+      // v2 — Figma's Filters dialog adds a weight category, so the cache needs
+      // the raw hectogram value next to height.
+      if (from < 2) {
+        await m.addColumn(pokemonSummaries, pokemonSummaries.weight);
+      }
+    },
+  );
 }
 
 QueryExecutor _openConnection() => driftDatabase(

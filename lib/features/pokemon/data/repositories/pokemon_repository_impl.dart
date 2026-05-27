@@ -82,6 +82,7 @@ class PokemonRepositoryImpl implements PokemonRepository {
           summaryToCompanion(
             pokemon,
             heightDecimetres: dto.height,
+            weightHectograms: dto.weight,
             weaknessMask: mask,
             nowMs: nowMs,
           ),

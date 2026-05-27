@@ -44,13 +44,14 @@ Future<Future<FiltersSheetResult?>> _openSheet(
 
 void main() {
   group('FiltersSheet', () {
-    testWidgets('renders title and the three section headings', (tester) async {
+    testWidgets('renders title and the four section headings', (tester) async {
       await _openSheet(tester);
 
       expect(find.text('Filters'), findsOneWidget);
       expect(find.text('Types'), findsOneWidget);
       expect(find.text('Weaknesses'), findsOneWidget);
       expect(find.text('Heights'), findsOneWidget);
+      expect(find.text('Weights'), findsOneWidget);
     });
 
     testWidgets('selecting types and applying returns the filter', (
@@ -58,9 +59,9 @@ void main() {
     ) async {
       final future = await _openSheet(tester);
 
-      // "Fire" appears in both Types and Weaknesses sections; .first targets
-      // the Types section above Weaknesses in the column.
-      await tester.tap(find.text('Fire').first);
+      // Per-bucket keys disambiguate the visually-identical Types and
+      // Weaknesses sections, where labels no longer appear alongside icons.
+      await tester.tap(find.byKey(const Key('type-fire')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Apply'));
       await tester.pumpAndSettle();
@@ -71,6 +72,7 @@ void main() {
       expect(result.value!.types, {PokemonTypeId.fire});
       expect(result.value!.weaknesses, isEmpty);
       expect(result.value!.height, isNull);
+      expect(result.value!.weight, isNull);
     });
 
     testWidgets('selecting weaknesses and applying returns the filter', (
@@ -78,8 +80,7 @@ void main() {
     ) async {
       final future = await _openSheet(tester);
 
-      // The Weaknesses section is the second chip grid; .last targets it.
-      await tester.tap(find.text('Water').last);
+      await tester.tap(find.byKey(const Key('weakness-water')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Apply'));
       await tester.pumpAndSettle();
@@ -96,9 +97,26 @@ void main() {
     ) async {
       final future = await _openSheet(tester);
 
-      await tester.tap(find.text('Short'));
+      await tester.tap(find.byKey(const Key('height-short')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Short'));
+      await tester.tap(find.byKey(const Key('height-short')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Apply'));
+      await tester.pumpAndSettle();
+
+      final result = await future;
+      expect(result, isNotNull);
+      expect(result!.value, isNull);
+    });
+
+    testWidgets('weight single-select toggles off when retapped', (
+      tester,
+    ) async {
+      final future = await _openSheet(tester);
+
+      await tester.tap(find.byKey(const Key('weight-light')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('weight-light')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Apply'));
       await tester.pumpAndSettle();
@@ -170,10 +188,11 @@ void main() {
         initial: const PokemonFilter(
           types: {PokemonTypeId.fire, PokemonTypeId.water},
           height: HeightCategory.tall,
+          weight: WeightCategory.heavy,
         ),
       );
 
-      expect(find.text('Filters (3)'), findsOneWidget);
+      expect(find.text('Filters (4)'), findsOneWidget);
     });
 
     testWidgets('preserves generationId from initial filter on apply', (
@@ -184,7 +203,7 @@ void main() {
         initial: const PokemonFilter(generationId: 2),
       );
 
-      await tester.tap(find.text('Fire').first);
+      await tester.tap(find.byKey(const Key('type-fire')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Apply'));
       await tester.pumpAndSettle();

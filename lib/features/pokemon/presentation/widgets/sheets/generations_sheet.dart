@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
@@ -13,14 +14,13 @@ typedef GenerationsSheetResult = ({int? value});
 
 /// The Generation sheet (RF-25..RF-28).
 ///
-/// Renders the available generations as 160×129 tiles in a 2-column grid,
-/// matching the Figma `Generation` frame (`268:248`): the selected tile uses
-/// `#EA5D60` with a tinted shadow, others use `#F2F2F2`. Tapping a tile pops
-/// the sheet with the chosen generation id; tapping the active tile clears
-/// the filter. UC-05.
-///
-/// MVP scope is Gen 1 only — extend the label map once the spec opens up to
-/// more generations.
+/// Renders the eight published generations as 160×129 tiles in a 2-column
+/// grid, matching the Figma `Generation / *` symbols (`105:617`..`105:745`).
+/// Each tile shows the three starter sprites at the top and the generation
+/// label at the bottom. The selected tile uses `#EA5D60` with a tinted
+/// drop shadow; unselected tiles use `#F2F2F2`. Tapping a tile pops the sheet
+/// with the chosen generation id; tapping the active tile clears the filter
+/// (UC-05).
 class GenerationsSheet extends StatefulWidget {
   /// Creates a [GenerationsSheet] preloaded with [initial].
   const GenerationsSheet({this.initial, super.key});
@@ -33,8 +33,30 @@ class GenerationsSheet extends StatefulWidget {
 }
 
 class _GenerationsSheetState extends State<GenerationsSheet> {
+  /// Roman-numeral labels for the eight published generations, matching the
+  /// Figma component names (`Generation / I`..`Generation / VIII`).
   static const _labels = <int, String>{
     1: 'Generation I',
+    2: 'Generation II',
+    3: 'Generation III',
+    4: 'Generation IV',
+    5: 'Generation V',
+    6: 'Generation VI',
+    7: 'Generation VII',
+    8: 'Generation VIII',
+  };
+
+  /// National-Dex starter trios per generation. Each row mirrors what the
+  /// Figma tiles show in the same order.
+  static const _starters = <int, List<int>>{
+    1: [1, 4, 7],
+    2: [152, 155, 158],
+    3: [252, 255, 258],
+    4: [387, 390, 393],
+    5: [495, 498, 501],
+    6: [650, 653, 656],
+    7: [722, 725, 728],
+    8: [810, 813, 816],
   };
 
   void _select(int id) {
@@ -73,6 +95,7 @@ class _GenerationsSheetState extends State<GenerationsSheet> {
           final isSelected = widget.initial == entry.key;
           return _GenerationCard(
             label: entry.value,
+            starterIds: _starters[entry.key]!,
             selected: isSelected,
             onTap: () => _select(entry.key),
           );
@@ -85,11 +108,13 @@ class _GenerationsSheetState extends State<GenerationsSheet> {
 class _GenerationCard extends StatelessWidget {
   const _GenerationCard({
     required this.label,
+    required this.starterIds,
     required this.selected,
     required this.onTap,
   });
 
   final String label;
+  final List<int> starterIds;
   final bool selected;
   final VoidCallback onTap;
 
@@ -107,30 +132,69 @@ class _GenerationCard extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: SvgPicture.asset(
-                  'assets/illustrations/generation_card_pattern.svg',
-                  fit: BoxFit.cover,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: Stack(
+            children: [
+              // Pokeball + dot pattern overlay — only meaningful on the grey
+              // unselected variant; the red selected variant would otherwise
+              // mask it with the same grey gradient.
+              if (!selected)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: SvgPicture.asset(
+                      'assets/illustrations/generation_card_pattern.svg',
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+              Positioned(
+                left: 17,
+                top: 30,
+                child: Row(
+                  children: [
+                    for (final id in starterIds) _StarterSprite(pokemonId: id),
+                  ],
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-              child: Align(
-                alignment: Alignment.bottomCenter,
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 12,
                 child: Text(
                   label,
                   textAlign: TextAlign.center,
                   style: AppTypography.description.copyWith(color: fg),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
+      ),
+    );
+  }
+}
+
+class _StarterSprite extends StatelessWidget {
+  const _StarterSprite({required this.pokemonId});
+
+  final int pokemonId;
+
+  static const _baseUrl =
+      'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork';
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 45,
+      height: 45,
+      child: CachedNetworkImage(
+        imageUrl: '$_baseUrl/$pokemonId.png',
+        fit: BoxFit.contain,
+        // No placeholder/error widget — empty space matches Figma's empty
+        // tile state and avoids leaking a Material spinner into the grid.
+        placeholder: (_, _) => const SizedBox.shrink(),
+        errorWidget: (_, _, _) => const SizedBox.shrink(),
       ),
     );
   }

@@ -16,7 +16,7 @@ import 'package:pokedex/features/pokemon/presentation/widgets/sheets/sort_sheet.
 
 /// The Home / browse screen (UC-01..UC-05, UC-08).
 ///
-/// Matches the Figma `Home` frame (`268:0`): no AppBar — instead a custom
+/// Matches the Figma Home mockup (`321:675`): no AppBar — instead a custom
 /// header with the Pokeball watermark, the Generation/Sort/Filter icons in
 /// the top-right corner, a 32pt Bold "Pokédex" title, a 16pt Regular subtitle,
 /// the search field, and a single-column scrollable list of `PokemonCard`s.
@@ -137,7 +137,7 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
   }
 }
 
-/// The faint Pokeball motif behind the screen title — Figma frame `268:1`,
+/// The faint Pokeball motif behind the screen title — Figma node `321:676`,
 /// anchored at top:-207 left:0 so only the lower half peeks through.
 class _HeaderPokeballWatermark extends StatelessWidget {
   const _HeaderPokeballWatermark();
