@@ -4,8 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/error/result.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
+import 'package:pokedex/core/ui/states/empty_generation_widget.dart';
+import 'package:pokedex/core/ui/states/generic_error_widget.dart';
+import 'package:pokedex/core/ui/states/offline_error_widget.dart';
+import 'package:pokedex/core/ui/states/stale_cache_banner.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_page.dart';
@@ -93,8 +98,14 @@ Future<void> _pumpScreen(
   required _ListHarness harness,
   Size size = const Size(420, 1000),
 }) async {
-  await tester.binding.setSurfaceSize(size);
-  addTearDown(() => tester.binding.setSurfaceSize(null));
+  // Pin devicePixelRatio so the surface size translates 1:1 to logical pixels.
+  // Otherwise the default test DPR (3.0) shrinks `MediaQuery.sizeOf(context)`
+  // to ~140 logical px, which constrains the PokemonCard layout below its
+  // intrinsic minimum width.
+  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = size;
+  addTearDown(tester.view.resetDevicePixelRatio);
+  addTearDown(tester.view.resetPhysicalSize);
   addTearDown(harness.cacheController.close);
   await tester.pumpWidget(
     ProviderScope(
@@ -242,10 +253,138 @@ void main() {
       },
     );
 
-    // The error state widget — and its test — land in PR4 alongside the
-    // dedicated empty/error widgets under `lib/core/ui/states/`. Verifying
-    // the PR2 placeholder here requires draining an uncaught zone error from
-    // the failed build, which makes the test noisy and brittle.
+    testWidgets(
+      'pure NetworkFailure with no cache renders OfflineErrorWidget (TE-01)',
+      (tester) async {
+        final harness = _makeHarness();
+        when(
+          () => harness.getList.call(
+            limit: any(named: 'limit'),
+            offset: any(named: 'offset'),
+          ),
+        ).thenAnswer((_) async => const Err(NetworkFailure()));
+
+        await _pumpScreen(tester, harness: harness);
+        // Pump twice: pumpAndSettle in tests may leave Riverpod in the
+        // `AsyncLoading.copyWithPrevious(AsyncError)` micro-state.
+        await tester.pumpAndSettle();
+        await tester.pump();
+
+        expect(find.byType(OfflineErrorWidget), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'pure ServerFailure with no cache renders GenericErrorWidget '
+      '(TE-03/06/07/09)',
+      (tester) async {
+        final harness = _makeHarness();
+        when(
+          () => harness.getList.call(
+            limit: any(named: 'limit'),
+            offset: any(named: 'offset'),
+          ),
+        ).thenAnswer((_) async => const Err(ServerFailure()));
+
+        await _pumpScreen(tester, harness: harness);
+        await tester.pumpAndSettle();
+
+        expect(find.byType(GenericErrorWidget), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'generation set AND active type filter with no items shows '
+      'EmptyFilterWidget (not the generation variant)',
+      (tester) async {
+        final harness = _makeHarness(firstPage: _page(1, 3));
+        when(
+          () => harness.findPokemon.call(
+            sort: any(named: 'sort'),
+            query: any(named: 'query'),
+            filter: any(named: 'filter'),
+          ),
+        ).thenAnswer((_) async => const Ok(<Pokemon>[]));
+
+        await _pumpScreen(tester, harness: harness);
+        await tester.pumpAndSettle();
+
+        // Combine: a generation AND a type filter active → not a backfill
+        // case, render EmptyFilterWidget instead of EmptyGenerationWidget.
+        final container = ProviderScope.containerOf(
+          tester.element(find.byType(PokemonListScreen)),
+        );
+        container
+            .read(pokemonListViewModelProvider.notifier)
+            .selectGeneration(1);
+        container
+            .read(pokemonListViewModelProvider.notifier)
+            .applyFilter(const PokemonFilter(types: {PokemonTypeId.fire}));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('No Pokémon match the current filters.'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'generation set with no items shows EmptyGenerationWidget (RN-15)',
+      (tester) async {
+        final harness = _makeHarness(firstPage: _page(1, 3));
+        when(
+          () => harness.findPokemon.call(
+            sort: any(named: 'sort'),
+            query: any(named: 'query'),
+            filter: any(named: 'filter'),
+          ),
+        ).thenAnswer((_) async => const Ok(<Pokemon>[]));
+
+        await _pumpScreen(tester, harness: harness);
+        await tester.pumpAndSettle();
+
+        final container = ProviderScope.containerOf(
+          tester.element(find.byType(PokemonListScreen)),
+        );
+        container
+            .read(pokemonListViewModelProvider.notifier)
+            .selectGeneration(2);
+        await tester.pumpAndSettle();
+
+        expect(find.byType(EmptyGenerationWidget), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'failed refresh over a populated cache shows the StaleCacheBanner '
+      '(TE-02)',
+      (tester) async {
+        final harness = _makeHarness(firstPage: _page(1, 3));
+        await _pumpScreen(tester, harness: harness);
+        await tester.pumpAndSettle();
+        expect(find.byType(adapter.PokemonCard), findsWidgets);
+
+        // Switch the next getPokemonList call to fail so the refresh surfaces
+        // a banner over the still-rendered cache.
+        when(
+          () => harness.getList.call(
+            limit: any(named: 'limit'),
+            offset: any(named: 'offset'),
+          ),
+        ).thenAnswer((_) async => const Err(NetworkFailure()));
+
+        final container = ProviderScope.containerOf(
+          tester.element(find.byType(PokemonListScreen)),
+        );
+        await container.read(pokemonListViewModelProvider.notifier).refresh();
+        await tester.pumpAndSettle();
+
+        expect(find.byType(StaleCacheBanner), findsOneWidget);
+        // Cards stay visible alongside the banner.
+        expect(find.byType(adapter.PokemonCard), findsWidgets);
+      },
+    );
   });
 
   // Closes the "screen-level wiring from icon buttons to sheet openers is

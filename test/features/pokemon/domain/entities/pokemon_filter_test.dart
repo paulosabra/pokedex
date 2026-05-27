@@ -32,5 +32,43 @@ void main() {
 
       expect(initial.copyWith(generationId: null).generationId, isNull);
     });
+
+    group('isEmpty', () {
+      test('default filter is empty', () {
+        expect(const PokemonFilter().isEmpty, isTrue);
+      });
+
+      test('any type axis flips isEmpty to false', () {
+        expect(
+          const PokemonFilter(types: {PokemonTypeId.grass}).isEmpty,
+          isFalse,
+        );
+      });
+
+      test('any weakness axis flips isEmpty to false', () {
+        expect(
+          const PokemonFilter(weaknesses: {PokemonTypeId.fire}).isEmpty,
+          isFalse,
+        );
+      });
+
+      test('height axis flips isEmpty to false', () {
+        expect(
+          const PokemonFilter(height: HeightCategory.tall).isEmpty,
+          isFalse,
+        );
+      });
+
+      test('weight axis flips isEmpty to false', () {
+        expect(
+          const PokemonFilter(weight: WeightCategory.heavy).isEmpty,
+          isFalse,
+        );
+      });
+
+      test('generationId axis flips isEmpty to false', () {
+        expect(const PokemonFilter(generationId: 1).isEmpty, isFalse);
+      });
+    });
   });
 }
