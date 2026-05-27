@@ -1,170 +1,258 @@
 ---
-title: "Test Quality Review — Domain Layer (feature/domain-layer)"
+title: "Test Quality Review — Presentation Layer PR1 (feature/presentation-part1)"
 date: 2026-05-26
-branch: feature/domain-layer
+branch: feature/presentation-part1
 reviewer: Test Quality Review Agent (VGV)
-plan: docs/plan/2026-05-26-feat-domain-layer-plan.md
+plan: docs/plan/2026-05-26-feat-presentation-layer-plan.md
+scope: T-18 Design System + generationId domain revision
 ---
 
 ## Test Quality Review
 
 ### Coverage Summary
 
-- **Test run:** Pass (all suites green)
-- **Overall coverage (including generated files):** 63.0% (1450/2303 lines)
-- **Hand-written files coverage (excluding `*.g.dart` / `*.freezed.dart`):** 93.0% (627/674 lines) — above the ≥80% gate
-- **Files with tests:** All new domain-layer files have corresponding test files. No missing test files.
+- **Test run:** Pass — all suites green
+- **Overall coverage (all files, including generated):** 64.8% (1565/2414 lines)
+- **PR1 hand-written scope coverage** (`lib/core/ui/components/*.dart`, `pokemon_filter.dart`, `pokemon_dao.dart`, `find_pokemon.dart`, excluding `*.g.dart`/`*.freezed.dart`): **98.4% (183/186 lines)**
+- **Files with tests:** All 6 DS components, updated DAO, updated filter entity, and updated use-case test are present. The import boundary static guard is present. No missing test files within PR1 scope.
 
-**Coverage breakdown for files below 100% (hand-written only):**
+**Coverage gap — 3 uncovered lines in PR1 scope:**
 
-| File | Coverage | Gap | Severity |
-|---|---|---|---|
-| `lib/app/router/app_router.dart` | 0.0% (0/9) | All 9 executable lines — provider body always overridden in tests | Important |
-| `lib/core/network/connectivity_provider.dart` | 0.0% (0/2) | Both lines — always overridden before executing | Low |
-| `lib/core/database/app_database.dart` | 10.3% (4/39) | Table column DSL definitions; `_openConnection`; `appDatabase` provider body | Low |
-| `lib/features/pokemon/presentation/pages/pokemon_list_screen.dart` | 87.5% (7/8) | Line 20 — `context.go('/pokemon/1')` inside `onTap` | Low |
+| File | Lines | Branch |
+|---|---|---|
+| `lib/core/ui/components/pokemon_card.dart` | 120, 121, 123 | `_CardImage.build` — the `CachedNetworkImage(...)` constructor call and `errorWidget` callback |
 
-**Context on the 0% files:** Both `app_router.dart` and `connectivity_provider.dart` show 0% because every test that touches them overrides the provider before the body executes. The `app_router.dart` gap is the most consequential: a route-path typo in the real provider body (e.g., `/pokemon/:di` instead of `/pokemon/:id`) would not be caught. The plan requires `routerProvider` to appear in the `keepAlive` identity check — see the Important gap under the provider graph test. The `app_database.dart` low score is dominated by the Drift-generated table column DSL lines, which are not user logic. These gaps do not break the ≥80% gate.
+All three missed lines are in the `_CardImage` widget's network-image branch (the `imageUrl.isEmpty` guard at line 119 returns early for the empty-URL path, which is well-tested; the non-empty path at lines 120–123 is never reached by any test). Details under the PokemonCard quality section below.
 
----
-
-### Repository Impl Test Quality — `findPokemon` block
-
-**File:** `test/features/pokemon/data/repositories/pokemon_repository_impl_test.dart`
-
-**Result:** Pass — parametric matrix is complete and meaningful.
-
-- The five-case matrix (sort-only, query-only, filter-only, query+filter, corrupt-row) exercises the DAO's combined query against a real in-memory Drift database. Each assertion checks the output — entity ids in expected order — not the delegation call signature. This is correct behaviour-level testing.
-- The corrupt-row case asserts `CacheFailure`, testing the repository's error-mapping contract rather than the DAO's exception type.
-- The `watchCachedSummaries` block is preserved intact, including the corrupt-row drop test.
-- The `setUp` for this group seeds two realistic Pokémon (bulbasaur grass+poison, charmander fire) using the real `upsertSummaries` DAO path, giving genuine SQL execution. No mocked query results.
-- No `registerFallbackValue` is needed here: the repository test passes concrete values directly to the real DAO rather than using `any(named:)` matchers on `SortCriteria` or `PokemonFilter`. Correct.
-
-**Minor finding (style):** The group header is named `'findPokemon / watch (cache-backed)'`, mixing two distinct concerns. The `watchCachedSummaries` tests live inside the same group but represent a separate method. Splitting into `'findPokemon (cache-backed)'` and `'watchCachedSummaries'` would make test output easier to scan. Not a correctness issue.
+**Context on the 64.8% overall figure:** The low headline number is dominated by Drift-generated table DSL (`app_database.g.dart`: 294/932 lines; `app_database.dart` column definitions: 4/39 lines), the codegen provider stubs (`.g.dart` for each use case/provider), and the placeholder screen stubs not in PR1 scope. Hand-written non-generated code outside PR1 scope continues at the level established by the domain epic. The ≥80% gate applies per-slice to new production code; the PR1 hand-written scope clears at 98.4%.
 
 ---
 
-### Use Case Test Quality — 5 files
+### Domain Revision Test Quality
 
-#### `get_pokemon_list_test.dart`
+#### `test/features/pokemon/domain/entities/pokemon_filter_test.dart`
+
+**Result:** Pass with one suggestion.
+
+- **Defaults test:** asserts `types`, `weaknesses`, `height`, and `generationId` all hold their defaults (`{}`, `{}`, `null`, `null`). The comment explains the DAO depends on these defaults to detect "no filter active" — appropriate linking of the test to its purpose. Meaningful, not tautological.
+- **copyWith test:** seeds a filter with `types: {grass}` and `generationId: 1`, applies `copyWith(generationId: 2)`, then asserts both `reGen.generationId == 2` and `reGen.types == {grass}`. This correctly verifies independent field mutation and that unrelated fields survive a `copyWith`.
+
+**Suggestion — missing null-clear case:** The `copyWith` test covers overriding `generationId` from a non-null value to another non-null value (1 → 2). It does not test `copyWith(generationId: null)` to verify the field can be cleared back to null. In Freezed 3.x the `freezed` sentinel mechanism handles this, but a test asserting the clear path matters when the VM's `_composeFilter()` needs to stop filtering by generation after the user deselects all generations. This would be exercised indirectly by the DAO test, but an explicit entity-level assertion documents the contract at the right level. **Severity: Suggestion.**
+
+---
+
+#### `test/features/pokemon/data/datasources/pokemon_dao_test.dart`
+
+**Result:** Pass — the generationId additions are thorough and well-structured.
+
+- **Three new test cases in the `filters` group:**
+  - `by generationId returns only Pokémon from that generation` — covers gen-1 match (4 rows), gen-2 match (1 row), and gen-5 empty result (no rows). Tests the positive case, the singleton match, and the zero-result edge case in a single test. Readable because the setUp data makes the expected IDs self-evident.
+  - `generationId intersects with types + height` — verifies the new WHERE clause composes correctly with the existing type and height predicates. Uses a concrete fixture that separates chikorita (gen 2 grass short) from bulbasaur (gen 1 grass short) to make the assertion load-bearing. This is the integration case that would catch a misplaced OR/AND in the query builder.
+  - `a zero-result intersection returns empty, not an error` (pre-existing but relevant) — confirms zero-result intersections of any combined filter do not throw.
+
+- **setUp seeding:** The `filters` group setUp adds `chikorita` at `id: 152` with `generationId: 2`, distinguishable from the gen-1 defaults. This is the minimal addition needed and avoids contaminating the other test groups.
+
+- **No over-verification:** Tests assert output IDs (`List<int>` from `.map((r) => r.id)`), not SQL internals. Correct behavior-level testing against a real in-memory Drift database.
+
+- **One note — generation default assumption:** The summary builder helper defaults `generationId = 1`. This means the `sort`, `search`, and `height bucket boundary` test groups all seed gen-1 data without explicitly declaring it. If the default were changed, those groups' behavior would shift. This is a latent coupling rather than an active bug; it is pre-existing and unrelated to the PR1 additions. Not flagged as a defect.
+
+---
+
+#### `test/features/pokemon/domain/usecases/find_pokemon_test.dart`
 
 **Result:** Pass with one minor note.
 
-- Two cases (Ok pass-through, Err pass-through) are appropriate for a pure delegate. The use case has no branching logic.
-- The Ok test asserts both the return type (`isA<Ok<PokemonPage>>`) and value identity (`same(page)`) and verifies exact named arguments (`limit: 20, offset: 40`). Correct granularity for a delegate.
-- The Err test unpacks the failure and checks its runtime type. Appropriate.
-- No `setUpAll` / `registerFallbackValue` is needed for `int` parameters. Correct.
-- **Minor note — over-verification:** The Ok test calls `verify(() => repository.getPokemonList(limit: 20, offset: 40)).called(1)`. For a pure delegate, the mock only returns the stubbed value when the `when(...)` matcher fires with the correct arguments; therefore the `same(page)` identity assertion already implies the method was called correctly. The `verify` adds no additional information and couples the test to the call signature rather than the behaviour. Per VGV guidelines: assert behaviour and output, not implementation. **Severity: Low.**
+- **Test 1 (forwards verbatim):** passes concrete `sort`, `query: 'bulba'`, and `filter` values; verifies `same(matches)` identity; then uses `verify` with the exact concrete values. The `verify` is justified here because the test's stated purpose is "forwards verbatim" — the concrete-argument `verify` directly tests the forwarding claim, which is not fully observable from the return value alone (the use case could have discarded the query and returned a cached result). The design choice is defensible.
 
-#### `find_pokemon_test.dart`
+- **Test 2 (generationId + types filter):** exercises a `PokemonFilter(types: {grass}, generationId: 2)` via the use case. This is the PR1 domain revision test case called out in the plan. The test confirms the use case passes the composed filter through to the repository unchanged.
+
+  **Minor note — verify is incomplete in test 2:** The `verify` block at line 94–99 specifies `sort` and `filter` but omits `query`. In mocktail, an unspecified named argument in a `verify()` call acts as a wildcard, matching any value (including non-null values). The actual call passes `query: null` (omitted at the call site), but the verify would also pass if the use case had inadvertently passed `query: 'stale_value'`. Adding `query: null` explicitly to the verify call would make the forwarding contract airtight. The test is not wrong — the stub is wired with `query: any(named: 'query')` and the result identity assertion implies the stub fired — but the verify understates what it is checking. **Severity: Suggestion.**
+
+- **Test 3 (Err propagation):** calls with `sort` only (all defaults), stubs a `CacheFailure`, and asserts `isA<CacheFailure>`. Correct minimal test for the error path.
+
+---
+
+### UI Component Test Quality
+
+#### `test/core/ui/components/pokemon_card_test.dart`
+
+**Result:** Pass with one important gap.
+
+**What is well-covered:**
+- `#NNN` formatting (zero-padded id), name capitalization, primary badge rendering — one parametric test.
+- Dual-type: secondary badge renders when `secondaryType` is provided.
+- Single-type: secondary badge absent when `secondaryType` is omitted.
+- Broken-image placeholder: `Icons.broken_image` found when `imageUrl` is empty (default).
+- `onTap` callback fires correctly; synchronous, no `pumpAndSettle` needed. Correct.
+- Goldens: `single_type` (fire/charmander), `dual_type` (grass+poison/bulbasaur), `placeholder` (electric/pikachu).
+
+**Important gap — `CachedNetworkImage` path (lines 120–121, 123) is never exercised:**
+
+The `_CardImage.build` method has two branches:
+1. `imageUrl.isEmpty` → return `_ImagePlaceholder()` — well tested.
+2. `imageUrl` non-empty → return `CachedNetworkImage(...)` with `errorWidget` fallback — **zero coverage**.
+
+No test ever supplies a non-empty `imageUrl`. As a result:
+- The `CachedNetworkImage` widget path is never reached.
+- The `errorWidget: (_, _, _) => const _ImagePlaceholder()` callback is never invoked.
+- If `CachedNetworkImage` were replaced with a `Text('broken')`, no functional test would fail.
+
+The plan's TE-11 acceptance criterion states: "broken-image placeholder shown on cards with missing/failing image." The "failing image" half (errorWidget callback) is untested.
+
+In widget tests, `CachedNetworkImage` attempts to resolve URLs through Flutter's test HTTP client. The standard fix is to inject a `FakeNetworkImageProvider` or override the HTTP client in test setUp to return a 404, then assert that `Icons.broken_image` appears. Alternatively, passing a well-known test image (e.g., a 1×1 transparent PNG encoded as a `data:` URI) via a custom `CacheManager` would test the success path.
+
+**Severity: Important.** The errorWidget callback is a production code path that handles the real-world case of a missing sprite URL. The TE-11 PRD requirement explicitly calls this out. The current placeholder golden (electric/pikachu) does not substitute for this test because it exercises the `isEmpty` guard, not the network-error path.
+
+**Minor note — placeholder golden naming:**  
+`pokemon_card_placeholder.png` uses pikachu/electric with an empty `imageUrl`. The golden captures the empty-URL placeholder rendering, but it is visually indistinguishable in intent from `pokemon_card_single_type.png` — both show a single-type card with the `broken_image` icon. The "placeholder" label implies it is specifically testing the broken-image state, but since no non-empty `imageUrl` golden exists, the distinction is between type-color (fire vs electric), not image-state (placeholder vs loaded). If a future golden is added for the loaded-image state, the current naming will be clearer in contrast. Not a defect; noted for future PR authors.
+
+---
+
+#### `test/core/ui/components/type_badge_test.dart`
+
+**Result:** Pass — strongest test file in the set.
+
+- **Label rendering:** asserts `find.text('Grass')` for the grass type. Correct.
+- **Color assertion:** resolves the `DecoratedBox` descendant of `TypeBadge` and reads its `BoxDecoration.color`, comparing it to `PokemonTypeTheme.styleOf(PokemonTypeId.fire).color`. This is a genuine behavior assertion — it would fail if `TypeBadge` used `.backgroundColor` instead of `.color`, or if the wrong type's color was applied. The finder (`find.descendant(of: find.byType(TypeBadge), matching: find.byType(DecoratedBox))`) is robust: there is exactly one `DecoratedBox` inside `TypeBadge`'s widget tree.
+- **18-type iteration:** pumps a new widget tree for each `PokemonTypeId.values` entry and asserts the expected title-cased label. This is the correct exhaustive-variation pattern. Each `pumpWidget` call replaces the tree entirely, so no inter-iteration state leakage is possible. No `pumpAndSettle` is needed between pumps for a synchronous, stateless widget. Sound.
+- **Size scaling:** captures `getSize` before and after switching to `TypeBadgeSize.medium` and asserts both height and width grow. Correct behavioral assertion.
+- **Goldens:** grass/fire/water small (3 representative type colors) + grass medium (captures padding/font change). The 3-color selection exercises visually distinct badge tints. Justified.
+
+**Suggestion — color assertion uses fire not grass:** The `applies the PokemonTypeTheme color` test pumps a fire badge but labels its test description generically. The test body is correct; the mismatch between the described scope ("the PokemonTypeTheme color") and the specific type chosen (fire) is a cosmetic inconsistency, not a functional issue. The test would be clearer if it described the chosen type: `'applies the fire PokemonTypeTheme color to the background'`. **Severity: Suggestion.**
+
+---
+
+#### `test/core/ui/components/stat_bar_test.dart`
+
+**Result:** Pass — golden count is justified.
+
+- **Label and value rendering:** asserts both `find.text('HP')` and `find.text('50')`. Correct.
+- **Fraction calculation:** asserts `fraction.widthFactor` is `closeTo(128 / 255, 1e-9)`. Correct use of `closeTo` to handle floating-point arithmetic. There is exactly one `FractionallySizedBox` in `StatBar`'s widget tree, so `tester.widget<FractionallySizedBox>` is unambiguous.
+- **Clamping above max:** value 999, max 255 → asserts `widthFactor == 1.0`. Tests the clamp upper bound.
+- **Clamping below zero:** value -10 → asserts `widthFactor == 0.0`. Tests the clamp lower bound.
+- **Goldens (0, 50, 100, 255):** the question asks whether these four goldens are distinct enough to justify all four. They are:
+  - `stat_bar_0.png` → 0% fill (bar background only, no colored segment visible)
+  - `stat_bar_50.png` → 50/255 ≈ 19.6% fill
+  - `stat_bar_100.png` → 100/255 ≈ 39.2% fill
+  - `stat_bar_255.png` → 100% fill (full colored bar)
+  
+  The four values map to four visually distinct rendering states: empty, low, medium, and full. The 0 and 255 extremes are required by the clamping acceptance criteria. The 50 and 100 intermediate values are useful because they verify the proportional rendering at sub-scale levels. Four goldens for a bar widget with continuous variation is reasonable. No reduction recommended.
+
+---
+
+#### `test/core/ui/components/section_header_test.dart`
+
+**Result:** Pass with one minor gap.
+
+- **Title-only test:** asserts `find.text('Types')` is found. Correct.
+- **With-trailing test:** taps the `TextButton('Clear')` and asserts the counter increments. Correct behavioral assertion — verifies the trailing widget is wired and interactive, not just rendered.
+- **Golden:** title + trailing together. Matches the plan's "one golden" spec.
+
+**Minor gap — title-only test does not assert trailing widget is absent:**
+
+The test named `'renders only the title when no trailing is provided'` only asserts that the title is present. It does not assert that no trailing widget exists (e.g., `expect(find.byType(TextButton), findsNothing)`). If the `SectionHeader` implementation accidentally rendered a default `Text('')` or empty `SizedBox` in the trailing slot unconditionally, this test would still pass. The Dart spread operator for nullable trailing (`?trailing` in `Row.children`) correctly handles null, but a future regression could add an unconditional child here. Adding a `findsNothing` assertion for `find.byType(TextButton)` or similar would close this gap. **Severity: Suggestion.**
+
+---
+
+#### `test/core/ui/components/search_field_test.dart`
 
 **Result:** Pass.
 
-- `registerFallbackValue(SortCriteria.numberAsc)` is registered in `setUpAll`. `SortCriteria` is an enum used as a non-nullable named argument; mocktail requires a fallback value for `any(named:)` on non-nullable types. Correct.
-- `PokemonFilter` is matched with `filter: any(named: 'filter')` and the parameter is nullable (`PokemonFilter?`). Mocktail does not require a fallback for nullable types. No `registerFallbackValue(PokemonFilter(...))` was added — correct YAGNI.
-- The Ok test passes concrete `sort`, `query`, and `filter` values and verifies those exact values were forwarded via `verify`. Identity check (`same(matches)`) confirms no transformation.
-- The Err test omits `query` and `filter`, exercising the all-null (default) path.
+- **Hint text:** asserts `find.text('Search Pokémon')` when the field is empty. Correct.
+- **onChanged:** collects into a `List<String>` and asserts `contains('pika')` after `enterText`. Using `contains` rather than `equals(['p', 'pi', 'pik', 'pika'])` is intentional — the test verifies the callback fires with the final value, not every intermediate keystroke. Reasonable for a stateless field that delegates to `TextField`.
+- **Controller binding:** creates a `TextEditingController`, adds `addTearDown(controller.dispose)` (correct resource management), pumps with the controller, enters text, and asserts `controller.text == 'mew'`. Correct.
+- **onSubmitted:** uses `receiveAction(TextInputAction.done)` to simulate keyboard submit. Asserts the submitted value. Correct.
+- **Goldens:** empty and filled states. The filled golden uses a pre-populated controller rather than `enterText`, which avoids test-input cursor artifacts in the pixel comparison.
 
-#### `get_pokemon_detail_test.dart`
-
-**Result:** Pass with one minor note.
-
-- Uses `_FakeDetail extends Fake implements PokemonDetail` as the return value. This is the correct mocktail idiom for a complex object used only for identity comparison — a `Fake` avoids implementing all interface members while providing a concrete instance for `same(detail)`.
-- **Minor note — over-verification:** `verify(() => repository.getPokemonDetail(25)).called(1)` is the same over-verification pattern noted in `get_pokemon_list_test`. The `same(detail)` assertion already implies correct delegation. **Severity: Low.**
-- No `registerFallbackValue` is needed for `int` parameters. Correct.
-
-#### `get_evolution_chain_test.dart`
-
-**Result:** Pass with one minor note.
-
-- Same pattern as `get_pokemon_detail_test` — `_FakeChain` fake, `same(chain)` identity check.
-- Both test cases use `id: 1`. No test exercises `id: 0` or a large id; for a pure delegate this is acceptable — the repository tests own the id-routing logic.
-- The same over-verification note applies as above. **Severity: Low.**
-
-#### `watch_pokemon_list_test.dart`
-
-**Result:** Pass with one minor finding — the strongest of the five files overall.
-
-- Four explicit test cases match the plan's stated requirements: initial emission propagation, subsequent emissions in order, filter forwarding, and static type contract.
-- The static-type test uses `// ignore: omit_local_variable_types` plus `final Stream<List<Pokemon>> stream = useCase(...)` as a compile-time assertion. This is the correct technique — the assignment refuses to compile if the return type drifts to `Stream<Result<List<Pokemon>>>`.
-- **Finding — tautological runtime assertion:** The line `expect(stream, isA<Stream<List<Pokemon>>>())` that follows the typed assignment is unreachable as a meaningful assertion. The compile-time constraint on the variable declaration already guarantees the runtime type. A test that would only fail at runtime (never at compile time) cannot provide additional safety here — if the assignment compiled, `isA<Stream<List<Pokemon>>>()` will always be true. This is a tautological assertion per VGV anti-pattern guidelines. **Severity: Low.** The comment above the typed assignment correctly explains the intent; the `expect` line should be removed.
-- `registerFallbackValue(SortCriteria.numberAsc)` registered correctly; nullable `PokemonFilter?` needs no fallback. Correct.
-- "Propagates subsequent emissions in order" uses `Stream.fromIterable(const [...])` + `.toList()` — a clean, synchronous-stream approach without unnecessary async scaffolding.
-- The filter forwarding test drains the stream with `.drain<void>()` before calling `verify`, ensuring the stream is subscribed and the delegation fires. Correct sequencing.
+**Note — `autofocus` parameter is untested:** `SearchField` has an `autofocus` parameter (default `false`) that is wired to `TextField.autofocus`. No test covers the `autofocus: true` path. In a widget test, `autofocus` is observable via `FocusManager.instance.primaryFocus` or `tester.testTextInput.isVisible`. This is a minor omission for a low-risk default-false parameter. **Severity: Suggestion.**
 
 ---
 
-### Boot Widget Test Quality — `app_boot_test.dart`
+#### `test/core/ui/components/app_bottom_sheet_test.dart`
 
 **Result:** Pass.
 
-- Two tests covering the two routes: boot to `/` (list placeholder) and deep-link to `/pokemon/25` (detail placeholder).
-- Both tests wrap `PokedexApp` in `ProviderScope` with `routerProvider.overrideWith(...)`. The override is required (as the plan notes) because the default `routerProvider` boots at `/` — without the override the deep-link test would land on the list, not the detail.
-- The boot test asserts `MaterialApp.routerConfig` is not null, theme is not null, theme background colour matches `AppColors.backgroundWhite`, and `PokemonListScreen` is found in the widget tree. These are meaningful structural assertions, not tautologies.
-- The deep-link test uses `pumpAndSettle()` to allow `GoRouter`'s asynchronous navigation to complete, then reads the `PokemonDetailScreen` widget and asserts `detail.id == 25`. This directly verifies the route parameter parsing (`int.parse(state.pathParameters['id']!)`). Correct and meaningful.
-- The `_routerAt(String location)` helper avoids duplication and keeps both tests readable.
+- **Title and content:** asserts both `find.text('Filters')` and `find.text('content')`. Correct.
+- **Primary action absent:** asserts `find.byType(ElevatedButton)` → `findsNothing`. Correct negative assertion — would catch an unconditional button render.
+- **Primary action present:** taps "Apply" and asserts the `tapped` flag is true. Correct behavioral test for the optional CTA.
+- **Trailing in header:** taps "Clear" and asserts the `cleared` flag is true. Correct behavioral test for `titleTrailing`.
+- **Golden:** full configuration (title + trailing + primary action + content). Single golden per plan spec.
 
 ---
 
-### Provider Graph Test Quality — `provider_graph_test.dart`
+### Static Guard Test Quality
 
-**Result:** Mostly Pass — the `keepAlive` identity test is genuine and meaningful. One important gap noted.
+#### `test/core/ui/import_boundary_test.dart`
 
-**What it does well:**
+**Result:** Pass with one structural note.
 
-- The `keepAlive` contract test reads each resource-holding provider before invalidating a downstream consumer, then re-reads and asserts `identical(before, after)`. `identical` in Dart compares object references (not equality), so a failing assertion means the provider was disposed and reconstructed — the exact resource-leak scenario the plan identifies as medium-risk. This is substantively stronger than a non-null assertion and passes the "does it test what `dart analyze` cannot" bar.
-- `connectivityProvider` is overridden with `_FakeConnectivity extends Fake implements Connectivity` — a `Fake` subclass with one method stubbed — avoiding real platform channel calls. `appDatabaseProvider` is overridden with an in-memory `AppDatabase.forTesting(NativeDatabase.memory())`. Both are the correct isolation approaches.
-- The use-case type-assertion group uses `isA<T>()` on each provider result. This correctly catches the scenario where a provider body returns a mis-typed or mis-wired object — something `dart analyze` cannot detect because codegen providers return `Object` from the generated factory.
-- `setUp`/`tearDown` correctly create and dispose both the `ProviderContainer` and the in-memory `AppDatabase`. No resource leaks in the test itself.
+The test scans `lib/core/ui/**` for any `import` line containing `package:pokedex/features/` and fails the build if any are found. This is the correct approach for enforcing the layer boundary as a CI gate rather than a lint convention that rots silently.
 
-**Important gap — `routerProvider` is absent from the `keepAlive` contract test:**
+**Structural note — relative `Directory` path assumes CWD is project root:**
 
-The plan's acceptance criteria explicitly list all four `keepAlive: true` providers — `dioProvider`, `appDatabaseProvider`, `connectivityProvider`, and `routerProvider` — as subjects of the identity check. The test verifies the first three but omits `routerProvider`. This means that if `keepAlive: true` is accidentally removed from `app_router.dart`, no test will fail. The `routerProvider` holds navigation history and wires `ref.onDispose(router.dispose)` — losing `keepAlive` would reset the user's navigation state on every downstream rebuild, which is the exact leak class the plan's risk register names. **Severity: Important.**
+```dart
+final root = Directory('lib/core/ui');
+```
 
-The omission is partly understandable — constructing a real `GoRouter` in a `ProviderContainer` unit test requires either a widget environment (for route matching) or a carefully isolated router construction. A viable approach is to add `routerProvider` to the same `container` (which already has the in-memory overrides) by additionally overriding `pokemonLocalDataSourceProvider` and `pokemonRemoteDataSourceProvider` so the default `pokemonRepositoryProvider` can resolve, or more simply, by reading `routerProvider` before and after `container.invalidate(routerProvider)` itself (since `routerProvider` has no downstream dependents to trigger the invalidation another way, `container.invalidate` + `container.read` is sufficient). Alternatively, a separate `ProviderContainer` with `overrides: [routerProvider.overrideWith(...)]` could test that a supplied `keepAlive` provider survives invalidation of an unrelated downstream.
-
-**Semantic note on `container.invalidate` + immediate `container.read`:**
-
-The test calls `container.invalidate(pokemonRepositoryProvider)` then `container.read(pokemonRepositoryProvider)` in sequence. `invalidate` marks the provider stale; the immediately following `read` triggers disposal-and-rebuild of the invalidated provider. This sequence correctly exercises the `keepAlive` contract for upstreams because Riverpod disposes non-`keepAlive` upstream providers when their downstream is torn down. The sequencing is valid.
+This path is relative to the process working directory at test execution time. The `flutter test` runner and the VGV CLI test runner both set `CWD` to the project root before executing tests, so this works in practice. However, if the test is ever run via a tool that sets a different `CWD` (e.g., a custom IDE runner or a nested build script), `root.existsSync()` would return `false` and the test would fail with the `reason:` message rather than catching import violations. The assertion `expect(root.existsSync(), isTrue)` acts as a safety net for this case, which is good. Using an absolute path via `path.join(Directory.current.path, 'lib/core/ui')` or the `Platform.script` approach would make the test CWD-independent. **Severity: Suggestion** (works correctly in all current CI and local configurations; risk is latent).
 
 ---
 
 ### Anti-Patterns Found
 
-**1. `watch_pokemon_list_test.dart` — tautological runtime assertion following a compile-time type constraint**
+**1. `pokemon_card_test.dart` — CachedNetworkImage branch is entirely dead in tests**
 
-- **Location:** static-type-contract test, final `expect` line.
-- **Issue:** `expect(stream, isA<Stream<List<Pokemon>>>())` always passes whenever the preceding typed variable assignment `final Stream<List<Pokemon>> stream = useCase(...)` compiles. The assignment is the load-bearing assertion — it would refuse to compile if the use case returned `Stream<Result<List<Pokemon>>>`. The runtime `expect` adds no information and inflates the "test passes" signal without catching any real bug.
-- **Fix:** Remove the `expect(stream, isA<Stream<List<Pokemon>>>())` line. Leave the typed assignment and the comment. The test comment already explains the intent clearly.
+- **Location:** `_CardImage.build`, lines 120–121, 123 (`test/core/ui/components/pokemon_card_test.dart` — all tests use `imageUrl: ''` default)
+- **Issue:** The production `errorWidget` callback (`(_, _, _) => const _ImagePlaceholder()`) is never reached. The plan's TE-11 "failing image" criterion is unmet. If the `errorWidget` callback were deleted, no test would fail.
+- **Fix:** Add a test that supplies a non-empty `imageUrl` (e.g., a `data:image/png;base64,...` URI or a mocked `ImageProvider`) and simulates an image-load failure, then asserts `find.byIcon(Icons.broken_image)`. The existing `renders the broken-image placeholder when imageUrl is empty` test remains for the empty-URL case; the new test covers the network-error case.
 
-**2. `get_pokemon_list_test.dart`, `get_pokemon_detail_test.dart`, `get_evolution_chain_test.dart` — over-verification on pure delegates**
+**2. `find_pokemon_test.dart:94` — verify in test 2 omits `query` argument, acting as a wildcard**
 
-- **Location:** Ok-path test in each of the three files, the `verify(...).called(1)` line.
-- **Issue:** For a pure delegate, the mock only returns the stubbed value when the `when(...)` matcher fires with the correct arguments. A successful return-value assertion (`same(...)` or `isA<Ok<...>>`) therefore already implies the method was called correctly. The subsequent `verify` re-asserts the same fact and couples the test to the delegation implementation detail rather than the observable behaviour. VGV guidelines: "verify behavior and output, not implementation details."
-- **Fix:** Remove `verify(...).called(1)` from the Ok-path tests in all three files. Keep `verify` only when testing a side effect (caching, logging, telemetry) not observable through the return value. The Err-path tests correctly omit `verify` and serve as the reference pattern.
-- **Note:** This is a style/brittleness finding. The tests are not wrong and will catch delegation bugs. The concern is coupling to the call signature.
+- **Location:** test `'forwards a filter combining generationId with types'`, the `verify()` block at line 94–99
+- **Issue:** `verify(() => repository.findPokemon(sort: ..., filter: filter))` does not specify `query:`. In mocktail, an unspecified named parameter in a `verify()` call matches any value. The actual call at line 88–91 passes no `query` (defaults to `null`), but the `verify` would pass even if the use case had forwarded `query: 'some_stale_query'`. The purpose of the test is to confirm verbatim forwarding; the omitted `query: null` weakens that contract.
+- **Fix:** Add `query: null` explicitly to the `verify` block. The when-stub already uses `query: any(named: 'query')` which is unaffected by this change.
 
 ---
 
-### Missing Test Coverage (non-critical, deferred to UI epic)
+### Golden Bloat Assessment
 
-- **`app/router/app_router.dart` (0% coverage):** The real `routerProvider` body — `GoRouter(routes: [...])` construction and `ref.onDispose(router.dispose)` — is never executed. A route-path typo in the real provider body would not be caught. The plan does not call for a test that exercises the real body directly; the gap is structural to the override-everywhere approach. Addressed in part by adding `routerProvider` to the provider graph `keepAlive` contract test (see Important gap above).
+**Question: Are the 4 `stat_bar` goldens (0/50/100/255) all justified?**
 
-- **`pokemon_list_screen.dart` line 20 (87.5%):** The `onTap` callback is not exercised. A `tester.tap(find.byType(ListTile))` + `pumpAndSettle` + `expect(find.byType(PokemonDetailScreen), findsOneWidget)` in `app_boot_test.dart` would close it, but this is a placeholder screen scheduled for replacement in T-19+. Acceptable deferral.
+Yes. The four values map to four qualitatively distinct visual states: empty (0%), low-fill (~20%), mid-fill (~39%), and full (100%). The extremes directly correspond to the clamping tests. The intermediate values ensure the fractional rendering logic produces visible fills at intermediate scales. For a proportional bar component where the fill width is the primary visual output, four goldens is appropriate and not excessive.
+
+**TypeBadge: 4 goldens (grass/fire/water small + grass medium) — justified.** Three representative type colors verify that different hues render correctly; the medium size golden captures the padding/font-size variant. No bloat.
+
+**PokemonCard: 3 goldens (single/dual/placeholder) — minor naming concern but no bloat.** See the naming note in the PokemonCard section.
+
+---
+
+### Coverage Gaps Outside PR1 Scope (carry-over)
+
+These gaps pre-date this PR and are noted for completeness:
+
+| File | Coverage | Reason | Severity |
+|---|---|---|---|
+| `lib/core/network/connectivity_provider.dart` | 0% (0/2) | Always overridden before body executes in tests | Low |
+| `lib/core/database/app_database.dart` | 10.3% (4/39) | Drift table column DSL; `_openConnection`; `appDatabase` provider body | Low |
+| `lib/app/router/app_router.dart` | 66.7% (6/9) | Real provider body overridden in all tests | Low (carry-over from domain epic) |
+
+The `routerProvider` keepAlive gap identified in the prior domain-layer review (`docs/reviews/test-quality-review.md`) remains unresolved. It is outside PR1 scope but persists into this PR.
 
 ---
 
 ### Recommendations
 
-1. **(Important) Add `routerProvider` to the `keepAlive` contract test in `provider_graph_test.dart`.** Read `routerProvider` from the container before and after a downstream invalidation (or after `container.invalidate(routerProvider)` + `container.read(routerProvider)`) and assert `identical(routerBefore, routerAfter)`. If a real `GoRouter` construction is inconvenient in the unit-test context, override `routerProvider` with a cheap stub that returns a minimal `GoRouter(routes: [GoRoute(path: '/', builder: (_, __) => const SizedBox())])`. The identity contract is independent of the route configuration.
+1. **(Important) Add a test for the `CachedNetworkImage` error path in `pokemon_card_test.dart`.** Supply a non-empty `imageUrl` and simulate a network failure so the `errorWidget` callback fires and `Icons.broken_image` appears. This closes TE-11's "failing image" criterion and covers lines 120–121, 123. Moving the `PR1 hand-written coverage` from 98.4% to 100%.
 
-2. **(Low) Remove the tautological `expect` in the static-type test in `watch_pokemon_list_test.dart`.** The typed variable declaration is the sole load-bearing assertion. Remove `expect(stream, isA<Stream<List<Pokemon>>>())`.
+2. **(Suggestion) Add `query: null` to the `verify` block in `find_pokemon_test.dart` test 2.** Tightens the forwarding contract from "sort and filter were passed correctly" to "sort, query (null), and filter were all passed correctly."
 
-3. **(Low) Remove `verify(...).called(1)` from the Ok-path in `get_pokemon_list_test`, `get_pokemon_detail_test`, and `get_evolution_chain_test`.** The return-value identity assertions already validate delegation. Use the Err-path tests as the reference pattern.
+3. **(Suggestion) Add `expect(find.byType(TextButton), findsNothing)` to the title-only test in `section_header_test.dart`.** The test name says "only the title" but only asserts the title is present; asserting that no interactive widget is present completes the contract.
 
-4. **(Style) Split `'findPokemon / watch (cache-backed)'` into two groups** in the repository impl test — `'findPokemon (cache-backed)'` and `'watchCachedSummaries'` — to improve test output readability.
+4. **(Suggestion) Explicitly test `autofocus: true` in `search_field_test.dart`.** Verify that the field acquires focus after pump. Low priority for a default-false boolean, but closes the last untested parameter.
 
-5. **(Future — UI epic)** When `PokemonListScreen` is implemented, add a widget test that taps the `ListTile` and asserts navigation to `/pokemon/1`. The `onTap` lambda at line 20 is the only uncovered line in the screen.
+5. **(Suggestion) Add `copyWith(generationId: null)` to `pokemon_filter_test.dart`.** Confirms the Freezed sentinel mechanism correctly clears an optional int field back to null — the path the VM's `selectGeneration(null)` intent will exercise.
+
+6. **(Suggestion) Use an absolute path in `import_boundary_test.dart`.** Replace `Directory('lib/core/ui')` with `Directory(path.join(Directory.current.path, 'lib/core/ui'))` or equivalent to make the test CWD-independent.
 
 ---
 
@@ -172,13 +260,13 @@ The test calls `container.invalidate(pokemonRepositoryProvider)` then `container
 
 **Fix 1 issue before merging.**
 
-The test suite is green, hand-written coverage is 93% (well above the ≥80% gate), and VGV mocktail conventions are followed correctly throughout. The use-case tests are proportionate for pure-delegate classes: argument-forwarding verifications via identity checks, plus 2 cases (Ok/Err) per use case. The `findPokemon` repository matrix is genuinely end-to-end against a real in-memory Drift database. The provider graph `keepAlive` identity test is the right approach and closes the main composition-root risk.
+The PR1 test surface is well-constructed. All six DS components have their own test file, the tests use `mocktail` and `flutter_test` conventions consistently, golden tests are co-located with parametric tests per the plan's requirement, the 18-type iteration pattern is sound, and the `import_boundary_test.dart` static guard closes the layer boundary in CI. Domain revision tests (`generationId` DAO branch, entity defaults/copyWith, use-case forwarding) are complete and meaningful.
 
-The one issue to address before merge is the **missing `routerProvider` identity check in `provider_graph_test.dart`**. The plan explicitly lists all four `keepAlive` providers in its acceptance criteria, and `routerProvider` is the only one not guarded by an identity assertion. If `keepAlive: true` were accidentally removed from `app_router.dart`, no test would fail.
+The single issue to address before merge is the **`CachedNetworkImage` errorWidget path in `pokemon_card_test.dart`**. The plan's TE-11 acceptance criterion ("broken-image placeholder shown on cards with missing/failing image") is only half-satisfied — the empty-URL branch is covered but the network-error branch is not. Three production lines are uncovered, and a real regression (removing the `errorWidget:` argument from `CachedNetworkImage`) would not be caught by any test.
 
-The three low-severity findings (tautological `expect`, over-verification `verify` calls, group naming) can be addressed in this PR or tracked as polish items.
+The remaining findings are suggestions that improve robustness and documentation but do not block the merge.
 
 | Severity | Count | Items |
 |---|---|---|
-| Important | 1 | Missing `routerProvider` in `keepAlive` identity contract test |
-| Low | 3 | Tautological `expect` in static-type test (`watch_pokemon_list_test.dart`); over-verification `verify` in Ok-path of 3 use-case tests; mixed group name in repository impl test |
+| Important | 1 | `pokemon_card_test.dart` — `CachedNetworkImage` errorWidget branch (lines 120–121, 123) never exercised; TE-11 "failing image" criterion unmet |
+| Suggestion | 5 | `find_pokemon_test.dart`: verify omits `query: null`; `section_header_test.dart`: no `findsNothing` in title-only test; `search_field_test.dart`: `autofocus` untested; `pokemon_filter_test.dart`: no `copyWith(generationId: null)` test; `import_boundary_test.dart`: relative `Directory` path |

@@ -463,6 +463,18 @@ class EvolutionStage with _$EvolutionStage {
     String? condition,                     // ex.: "Level 16" (RF-41)
   }) = _EvolutionStage;
 }
+
+enum HeightCategory { short, medium, tall } // RF-16 buckets
+
+@freezed
+class PokemonFilter with _$PokemonFilter {  // RN-08 intersection of filters
+  const factory PokemonFilter({
+    @Default(<PokemonTypeId>{}) Set<PokemonTypeId> types,        // RF-14
+    @Default(<PokemonTypeId>{}) Set<PokemonTypeId> weaknesses,   // RF-15
+    HeightCategory? height,                                       // RF-16
+    int? generationId,                                            // UC-05 (PR1 revision)
+  }) = _PokemonFilter;
+}
 ```
 
 ### 8.3 Interface de repositório (domínio)

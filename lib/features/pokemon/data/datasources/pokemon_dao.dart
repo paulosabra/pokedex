@@ -116,6 +116,10 @@ class PokemonDao extends DatabaseAccessor<AppDatabase>
       if (height != null) {
         statement.where((t) => _heightPredicate(t, height));
       }
+      final generationId = filter.generationId;
+      if (generationId != null) {
+        statement.where((t) => t.generationId.equals(generationId));
+      }
     }
 
     statement.orderBy([_ordering(sort)]);
