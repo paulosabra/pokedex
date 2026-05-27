@@ -43,8 +43,6 @@ class PokemonListScreen extends ConsumerStatefulWidget {
 }
 
 class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
-  static const double _loadMoreThreshold = 200;
-
   late final ScrollController _scrollController;
   late final TextEditingController _searchController;
 
@@ -67,7 +65,7 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
   void _onScroll() {
     if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
-    if (pos.pixels >= pos.maxScrollExtent - _loadMoreThreshold) {
+    if (pos.pixels >= pos.maxScrollExtent) {
       unawaited(
         ref.read(pokemonListViewModelProvider.notifier).loadMore(),
       );
