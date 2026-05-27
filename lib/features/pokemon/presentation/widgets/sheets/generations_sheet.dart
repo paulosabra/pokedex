@@ -77,27 +77,29 @@ class GenerationsSheet extends StatelessWidget {
               child: const Text('Clear'),
             )
           : null,
-      child: GridView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          mainAxisSpacing: 14,
-          crossAxisSpacing: 14,
-          // 160 / 129 in the Figma component (`105:617`).
-          childAspectRatio: 160 / 129,
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: GridView.builder(
+          shrinkWrap: true,
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            mainAxisSpacing: 14,
+            crossAxisSpacing: 14,
+            // 160 / 129 in the Figma component (`105:617`).
+            childAspectRatio: 160 / 129,
+          ),
+          itemCount: _labels.length,
+          itemBuilder: (context, index) {
+            final entry = _labels.entries.elementAt(index);
+            final isSelected = initial == entry.key;
+            return _GenerationCard(
+              label: entry.value,
+              starterIds: _starters[entry.key]!,
+              selected: isSelected,
+              onTap: () => _select(context, entry.key),
+            );
+          },
         ),
-        itemCount: _labels.length,
-        itemBuilder: (context, index) {
-          final entry = _labels.entries.elementAt(index);
-          final isSelected = initial == entry.key;
-          return _GenerationCard(
-            label: entry.value,
-            starterIds: _starters[entry.key]!,
-            selected: isSelected,
-            onTap: () => _select(context, entry.key),
-          );
-        },
       ),
     );
   }
@@ -146,23 +148,44 @@ class _GenerationCard extends StatelessWidget {
                     ),
                   ),
                 ),
-              Positioned(
-                left: 17,
-                top: 30,
-                child: Row(
-                  children: [
-                    for (final id in starterIds) _StarterSprite(pokemonId: id),
-                  ],
-                ),
-              ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 12,
-                child: Text(
-                  label,
-                  textAlign: TextAlign.center,
-                  style: AppTypography.description.copyWith(color: fg),
+              // Vertically stacked content: starter trio centered in the upper
+              // band of the card, label centered at the bottom. The trio uses
+              // a LayoutBuilder so each sprite scales with the card's width
+              // (RF-26) instead of overflowing on narrow viewports.
+              Positioned.fill(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 14,
+                  ),
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final spriteSize =
+                                (constraints.maxWidth / starterIds.length)
+                                    .clamp(28.0, 50.0);
+                            return Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                for (final id in starterIds)
+                                  _StarterSprite(
+                                    pokemonId: id,
+                                    size: spriteSize,
+                                  ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                      Text(
+                        label,
+                        textAlign: TextAlign.center,
+                        style: AppTypography.description.copyWith(color: fg),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -174,9 +197,10 @@ class _GenerationCard extends StatelessWidget {
 }
 
 class _StarterSprite extends StatelessWidget {
-  const _StarterSprite({required this.pokemonId});
+  const _StarterSprite({required this.pokemonId, required this.size});
 
   final int pokemonId;
+  final double size;
 
   static const _baseUrl =
       'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork';
@@ -184,8 +208,8 @@ class _StarterSprite extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 45,
-      height: 45,
+      width: size,
+      height: size,
       child: CachedNetworkImage(
         imageUrl: '$_baseUrl/$pokemonId.png',
         fit: BoxFit.contain,

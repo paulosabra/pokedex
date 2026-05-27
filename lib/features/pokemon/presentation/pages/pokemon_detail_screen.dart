@@ -8,6 +8,7 @@ import 'package:pokedex/app/theme/app_typography.dart';
 import 'package:pokedex/app/theme/pokemon_type_theme.dart';
 import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
+import 'package:pokedex/core/ui/components/shimmer_box.dart';
 import 'package:pokedex/core/ui/states/generic_error_widget.dart';
 import 'package:pokedex/core/ui/states/offline_error_widget.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_detail.dart';
@@ -46,7 +47,7 @@ class PokemonDetailScreen extends ConsumerWidget {
     // a master-detail layout with the list rendering as the master panel.
     // `MasterDetailScaffold` returns [body] verbatim on compact/medium.
     return MasterDetailScaffold(
-      masterBuilder: (_) => const PokemonListScreen(),
+      masterBuilder: (_) => const PokemonListScreen(compact: true),
       child: body,
     );
   }
@@ -65,7 +66,6 @@ class _Loaded extends StatelessWidget {
     // type names, so this guards an edge case (e.g. a future region/type the
     // app hasn't shipped a mapping for).
     final primary = types.isEmpty ? PokemonTypeId.normal : types.first;
-    final secondary = types.length > 1 ? types[1] : null;
     final style = PokemonTypeTheme.styleOf(primary);
     return DefaultTabController(
       length: 3,
@@ -76,11 +76,7 @@ class _Loaded extends StatelessWidget {
           child: Column(
             children: [
               DetailHeader(
-                id: detail.summary.id,
                 name: detail.summary.name,
-                primaryType: primary,
-                secondaryType: secondary,
-                imageUrl: detail.summary.imageUrl,
                 onBack: () => _back(context),
               ),
               const _Tabs(),
@@ -157,17 +153,31 @@ class _TabsState extends State<_Tabs> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final tabWidth = constraints.maxWidth / controller.length;
-          const pokeballSize = 100.0;
+          const pokeballSize = 90.0;
+          const halfPokeball = pokeballSize / 2;
           final left = tabWidth * value + (tabWidth - pokeballSize) / 2;
+          // The pokeball ornament sits behind the active tab and rises up
+          // into the colored header. Per Figma the BOTTOM half is hidden
+          // behind the white-sheet rounding below — we render the upper
+          // hemisphere only by clipping the SVG's bottom half.
           return Stack(
             clipBehavior: Clip.none,
             children: [
               Positioned(
                 left: left,
-                top: -pokeballSize / 2,
                 width: pokeballSize,
-                height: pokeballSize,
-                child: const _PokeballWatermark(),
+                height: halfPokeball,
+                child: const ClipRect(
+                  child: OverflowBox(
+                    alignment: Alignment.topCenter,
+                    maxHeight: pokeballSize,
+                    child: SizedBox(
+                      width: pokeballSize,
+                      height: pokeballSize,
+                      child: _PokeballWatermark(),
+                    ),
+                  ),
+                ),
               ),
               const TabBar(
                 indicatorColor: Colors.transparent,
@@ -215,6 +225,10 @@ class _PokeballWatermark extends StatelessWidget {
   }
 }
 
+/// Detail-screen loading state — shimmer-animated skeleton blocks shaped
+/// roughly like the loaded layout (header strip, tab strip, content cards)
+/// so the user sees the page's silhouette while the detail loads, instead
+/// of a context-free spinner.
 class _Loading extends StatelessWidget {
   const _Loading();
 
@@ -222,7 +236,36 @@ class _Loading extends StatelessWidget {
   Widget build(BuildContext context) {
     return const Scaffold(
       backgroundColor: AppColors.backgroundWhite,
-      body: Center(child: CircularProgressIndicator()),
+      body: SafeArea(
+        bottom: false,
+        child: AppShimmer(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(40, 16, 40, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SkeletonBox(height: 140, borderRadius: 20),
+                SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(child: SkeletonBox(height: 32)),
+                    SizedBox(width: 12),
+                    Expanded(child: SkeletonBox(height: 32)),
+                    SizedBox(width: 12),
+                    Expanded(child: SkeletonBox(height: 32)),
+                  ],
+                ),
+                SizedBox(height: 24),
+                SkeletonBox(height: 100),
+                SizedBox(height: 16),
+                SkeletonBox(height: 100),
+                SizedBox(height: 16),
+                SkeletonBox(height: 100),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/error/result.dart';
+import 'package:pokedex/core/ui/components/shimmer_box.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/get_evolution_chain.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/get_pokemon_detail.dart';
 import 'package:pokedex/features/pokemon/presentation/pages/pokemon_detail_screen.dart';
@@ -109,7 +110,7 @@ void main() {
     });
 
     testWidgets(
-      'shows the loading spinner while the detail is loading',
+      'shows the shimmer skeleton while the detail is loading',
       (tester) async {
         final harness = _makeHarness();
         when(() => harness.getDetail.call(any())).thenAnswer(
@@ -120,8 +121,11 @@ void main() {
         );
 
         await _pumpScreen(tester, harness: harness);
-        // First frame after pumpWidget — still loading.
-        expect(find.byType(CircularProgressIndicator), findsOneWidget);
+        // First frame after pumpWidget — still loading. The shimmer wrapper
+        // and at least one skeleton block stand in for the prior spinner.
+        expect(find.byType(AppShimmer), findsOneWidget);
+        expect(find.byType(SkeletonBox), findsWidgets);
+        expect(find.byType(CircularProgressIndicator), findsNothing);
 
         await tester.pumpAndSettle();
       },

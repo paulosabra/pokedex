@@ -1,6 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
@@ -13,8 +14,10 @@ import 'package:pokedex/features/pokemon/presentation/view_models/pokemon_evolut
 ///
 /// Uses [pokemonEvolutionProvider] (resolved refine 7: loads lazily,
 /// independent of the detail VM, so About/Stats render first if the chain
-/// call is slower). Renders the recursive [_EvolutionBranch] so branching
-/// chains (e.g. Eevee) lay out faithfully (RN-13 / resolved blocker 5).
+/// call is slower). The chain is flattened into a list of (parent → child)
+/// pairs so every row uses the same `[card | connector | card]` layout —
+/// the previous recursive `Padding(left: 117)` indented later stages and
+/// broke the visual alignment between stage 1→2 and stage 2→3.
 class EvolutionTab extends ConsumerWidget {
   /// Creates an [EvolutionTab].
   const EvolutionTab({required this.id, required this.accent, super.key});
@@ -41,12 +44,26 @@ class EvolutionTab extends ConsumerWidget {
           const SizedBox(height: 20),
           async.when(
             skipLoadingOnReload: true,
-            data: (chain) => chain.root.evolvesTo.isEmpty
-                ? const Text(
-                    'This Pokémon does not evolve.',
-                    style: AppTypography.description,
-                  )
-                : _EvolutionBranch(node: chain.root),
+            data: (chain) {
+              final pairs = _flattenPairs(chain.root);
+              if (pairs.isEmpty) {
+                return const Text(
+                  'This Pokémon does not evolve.',
+                  style: AppTypography.description,
+                );
+              }
+              return Column(
+                children: [
+                  for (var i = 0; i < pairs.length; i++) ...[
+                    if (i > 0) const SizedBox(height: 20),
+                    _EvolutionRow(
+                      parent: pairs[i].$1,
+                      child: pairs[i].$2,
+                    ),
+                  ],
+                ],
+              );
+            },
             loading: () => const _EvolutionSkeleton(),
             error: (_, _) => const Text(
               'Could not load the evolution chain.',
@@ -57,76 +74,50 @@ class EvolutionTab extends ConsumerWidget {
       ),
     );
   }
-}
 
-class _EvolutionBranch extends StatelessWidget {
-  const _EvolutionBranch({required this.node});
-
-  final EvolutionNode node;
-
-  @override
-  Widget build(BuildContext context) {
-    if (node.evolvesTo.isEmpty) {
-      return _StageCard(stage: node.stage);
+  /// Walks the chain depth-first, emitting one (parent stage, child node)
+  /// pair per edge. The result is a flat list ordered so adjacent pairs share
+  /// the same alignment (stage card | connector | stage card).
+  static List<(EvolutionStage, EvolutionNode)> _flattenPairs(
+    EvolutionNode root,
+  ) {
+    final pairs = <(EvolutionStage, EvolutionNode)>[];
+    void walk(EvolutionNode node) {
+      for (final next in node.evolvesTo) {
+        pairs.add((node.stage, next));
+        walk(next);
+      }
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final child in node.evolvesTo)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 20),
-            child: _Pair(
-              parent: node.stage,
-              child: child,
-              showParent: child == node.evolvesTo.first,
-            ),
-          ),
-      ],
-    );
+    walk(root);
+    return pairs;
   }
 }
 
-class _Pair extends StatelessWidget {
-  const _Pair({
-    required this.parent,
-    required this.child,
-    required this.showParent,
-  });
+/// A single `parent → child` evolution row. Both stage cards lock to a fixed
+/// width while the connector flexes — so the layout adapts to the available
+/// width without ever shifting the cards off-axis between rows.
+class _EvolutionRow extends StatelessWidget {
+  const _EvolutionRow({required this.parent, required this.child});
+
+  static const double _cardWidth = 100;
 
   final EvolutionStage parent;
   final EvolutionNode child;
 
-  /// Suppresses the parent card on subsequent branches so a branching node
-  /// (e.g. Eevee → Vaporeon/Jolteon/Flareon) shows the parent only once with
-  /// a stack of children to the right.
-  final bool showParent;
-
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
       children: [
-        Row(
-          children: [
-            SizedBox(
-              width: 100,
-              child: showParent
-                  ? _StageCard(stage: parent)
-                  : const SizedBox.shrink(),
-            ),
-            Expanded(
-              child: _Connector(condition: child.stage.condition),
-            ),
-            SizedBox(width: 100, child: _StageCard(stage: child.stage)),
-          ],
+        SizedBox(
+          width: _cardWidth,
+          child: _StageCard(stage: parent),
         ),
-        // Recurse into grandchildren of this branch.
-        if (child.evolvesTo.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 20, left: 117),
-            child: _EvolutionBranch(node: child),
-          ),
+        Expanded(child: _Connector(condition: child.stage.condition)),
+        SizedBox(
+          width: _cardWidth,
+          child: _StageCard(stage: child.stage),
+        ),
       ],
     );
   }
@@ -164,6 +155,16 @@ class _Connector extends StatelessWidget {
 class _StageCard extends StatelessWidget {
   const _StageCard({required this.stage});
 
+  /// Pokéball silhouette diameter — matches the row's card slot width.
+  static const double _backgroundSize = 100;
+
+  /// Pokémon sprite size — deliberately larger than [_backgroundSize] so the
+  /// sprite reads as "bigger than the card", echoing the list `PokemonCard`'s
+  /// 130-on-115 sprite-overflows-body rhythm. The slot stays 100 wide so the
+  /// row's connector still anchors between fixed-width columns; `Clip.none`
+  /// just lets the sprite peek into the connector's whitespace.
+  static const double _imageSize = 130;
+
   final EvolutionStage stage;
 
   @override
@@ -173,18 +174,40 @@ class _StageCard extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 100,
-            height: 100,
-            decoration: const BoxDecoration(
-              color: AppColors.backgroundInput,
-              shape: BoxShape.circle,
-            ),
-            child: ClipOval(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: _StageImage(imageUrl: stage.imageUrl),
-              ),
+          SizedBox(
+            width: _backgroundSize,
+            height: _backgroundSize,
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
+              children: [
+                // ShaderMask paints a real top→bottom gradient onto the
+                // pokéball silhouette. The asset's own white-on-white gradient
+                // is invisible against the white tab panel, so we replace it
+                // with a translucent gray ramp via `srcIn` — preserving the
+                // ball's shape while making the gradient prominent.
+                ShaderMask(
+                  shaderCallback: (rect) => const LinearGradient(
+                    begin: Alignment.center,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Color(0xFFE5E5E5),
+                      Color(0xFFFFFFFF),
+                    ],
+                  ).createShader(rect),
+                  blendMode: BlendMode.srcIn,
+                  child: SvgPicture.asset(
+                    'assets/illustrations/pokeball.svg',
+                    width: _backgroundSize,
+                    height: _backgroundSize,
+                  ),
+                ),
+                SizedBox(
+                  width: _imageSize,
+                  height: _imageSize,
+                  child: _StageImage(imageUrl: stage.imageUrl),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 6),

@@ -32,6 +32,10 @@ enum WeightCategory {
   heavy,
 }
 
+/// Inclusive `[min, max]` National-Dex id window for the Number Range filter
+/// section (Figma `Filters - Scrolled`).
+typedef NumberRange = ({int min, int max});
+
 /// The set of active list filters. Filters combine as an intersection and are
 /// applied on top of the active search (RN-08).
 @freezed
@@ -43,6 +47,7 @@ abstract class PokemonFilter with _$PokemonFilter {
     HeightCategory? height,
     WeightCategory? weight,
     int? generationId,
+    NumberRange? numberRange,
   }) = _PokemonFilter;
 
   /// Required by Freezed to expose [isEmpty] as a derived getter.
@@ -57,5 +62,6 @@ abstract class PokemonFilter with _$PokemonFilter {
       weaknesses.isEmpty &&
       height == null &&
       weight == null &&
-      generationId == null;
+      generationId == null &&
+      numberRange == null;
 }

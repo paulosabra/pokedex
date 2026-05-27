@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:pokedex/app/theme/app_colors.dart';
-import 'package:pokedex/app/theme/app_typography.dart';
+import 'package:pokedex/core/ui/states/state_view.dart';
 
 /// Generic error fallback (TE-03/06/07/09).
 ///
@@ -30,35 +29,12 @@ class GenericErrorWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.error_outline,
-              size: 48,
-              color: AppColors.textGray,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: AppTypography.description,
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: onRetry,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.actionPrimary,
-                foregroundColor: AppColors.textWhite,
-              ),
-              child: Text(retryLabel),
-            ),
-          ],
-        ),
-      ),
+    return StateView(
+      glyph: Icons.error_outline,
+      title: 'Something went wrong',
+      body: message,
+      actionLabel: retryLabel,
+      onAction: onRetry,
     );
   }
 }

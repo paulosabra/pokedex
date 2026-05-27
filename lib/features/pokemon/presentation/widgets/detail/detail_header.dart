@@ -1,47 +1,25 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
-import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
-import 'package:pokedex/core/ui/components/type_badge.dart';
-import 'package:pokedex/core/utils/string_utils.dart';
 
 /// The colored detail-screen header — Figma `Profile #2 - About` (`321:416`).
 ///
-/// Renders the back-button row, the watermark species name, the artwork-in-
-/// circle on the left, the dot-pattern decoration in the top-right, and the
-/// number/name/badges stack. Lives directly under the screen's tinted
-/// background (the [Scaffold]'s `backgroundColor` is the type background
-/// tint, so this widget only paints its content).
+/// Renders the back-button row, the dot-pattern decoration in the top-right
+/// and the watermark species name centered behind them. The image, number,
+/// name and badges from the prior PR were removed so the header reads as the
+/// designer's intended "large name on tinted background" motif.
 class DetailHeader extends StatelessWidget {
   /// Creates a [DetailHeader].
   const DetailHeader({
-    required this.id,
     required this.name,
-    required this.primaryType,
-    required this.secondaryType,
-    required this.imageUrl,
     required this.onBack,
     super.key,
   });
 
-  static const double _height = 285;
+  static const double _height = 140;
 
-  /// National Dex id, rendered as `#NNN` (RF-02).
-  final int id;
-
-  /// Display name (capitalized when rendered).
+  /// Display name — rendered as the upper-case watermark behind the back row.
   final String name;
-
-  /// Drives the badge color and the screen background tint (RN-04).
-  final PokemonTypeId primaryType;
-
-  /// Optional secondary type, rendered as a second badge if present.
-  final PokemonTypeId? secondaryType;
-
-  /// Official artwork URL. Renders the TE-11 placeholder when empty or when
-  /// the network fetch fails.
-  final String imageUrl;
 
   /// Back-button callback — typically `() => context.pop()` (falls back to
   /// `context.go('/')` if the route was deep-linked into).
@@ -49,7 +27,6 @@ class DetailHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final secondary = secondaryType;
     return SizedBox(
       height: _height,
       child: Stack(
@@ -58,24 +35,29 @@ class DetailHeader extends StatelessWidget {
           // Watermark species name — Figma renders this as a transparent
           // gradient stroke at 100pt. Approximated with low-opacity white
           // bold text so the silhouette is preserved without depending on a
-          // shader.
+          // shader. `FittedBox` with `scaleDown` keeps the 100pt designer
+          // intent as an upper bound and only shrinks when the rendered name
+          // would otherwise overflow the back-button gutter (long names like
+          // "MR. MIME" on compact widths, or any name on narrower devices).
           Positioned(
             top: 15,
-            left: 0,
-            right: 0,
+            left: 40,
+            right: 40,
             child: Center(
-              child: Text(
-                name.toUpperCase(),
-                style: const TextStyle(
-                  fontFamily: AppTypography.fontFamily,
-                  fontSize: 100,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0x40FFFFFF),
-                  height: 1,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  name.toUpperCase(),
+                  style: const TextStyle(
+                    fontFamily: AppTypography.fontFamily,
+                    fontSize: 100,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0x40FFFFFF),
+                    height: 1,
+                  ),
+                  maxLines: 1,
+                  softWrap: false,
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.fade,
-                softWrap: false,
               ),
             ),
           ),
@@ -90,49 +72,6 @@ class DetailHeader extends StatelessWidget {
             left: 40,
             top: 30,
             child: _BackButton(onTap: onBack),
-          ),
-          Positioned(
-            left: 40,
-            top: 85,
-            width: 125,
-            height: 125,
-            child: _ArtworkInCircle(imageUrl: imageUrl),
-          ),
-          Positioned(
-            left: 190,
-            top: 104,
-            child: Text(
-              '#${id.toString().padLeft(3, '0')}',
-              style: AppTypography.filterTitle.copyWith(
-                color: AppColors.textNumber,
-              ),
-            ),
-          ),
-          Positioned(
-            left: 190,
-            top: 123,
-            right: 16,
-            child: Text(
-              StringUtils.capitalize(name),
-              style: AppTypography.pokemonName.copyWith(
-                fontSize: 32,
-                color: AppColors.textWhite,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          Positioned(
-            left: 190,
-            top: 166,
-            right: 16,
-            child: Wrap(
-              spacing: 6,
-              children: [
-                TypeBadge(type: primaryType),
-                if (secondary != null) TypeBadge(type: secondary),
-              ],
-            ),
           ),
         ],
       ),
@@ -157,74 +96,6 @@ class _BackButton extends StatelessWidget {
           height: 25,
           child: Icon(Icons.arrow_back, color: AppColors.textWhite, size: 25),
         ),
-      ),
-    );
-  }
-}
-
-class _ArtworkInCircle extends StatelessWidget {
-  const _ArtworkInCircle({required this.imageUrl});
-
-  final String imageUrl;
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: AppColors.backgroundWhite.withValues(alpha: 0.25),
-              shape: BoxShape.circle,
-            ),
-          ),
-        ),
-        Positioned.fill(child: _Artwork(imageUrl: imageUrl)),
-      ],
-    );
-  }
-}
-
-class _Artwork extends StatelessWidget {
-  const _Artwork({required this.imageUrl});
-
-  final String imageUrl;
-
-  @override
-  Widget build(BuildContext context) {
-    if (imageUrl.isEmpty) return const _ArtworkPlaceholder();
-    return CachedNetworkImage(
-      imageUrl: imageUrl,
-      fit: BoxFit.contain,
-      placeholder: (_, _) => const _ArtworkLoading(),
-      errorWidget: (_, _, _) => const _ArtworkPlaceholder(),
-    );
-  }
-}
-
-class _ArtworkPlaceholder extends StatelessWidget {
-  const _ArtworkPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Icon(Icons.broken_image, color: AppColors.textWhite, size: 56),
-    );
-  }
-}
-
-class _ArtworkLoading extends StatelessWidget {
-  const _ArtworkLoading();
-
-  @override
-  Widget build(BuildContext context) {
-    // Static placeholder — no spinner — so widget tests can `pumpAndSettle`
-    // without trapping on an infinite animation while CachedNetworkImage
-    // resolves the artwork.
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: AppColors.backgroundWhite.withValues(alpha: 0.15),
-        shape: BoxShape.circle,
       ),
     );
   }

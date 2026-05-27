@@ -248,7 +248,7 @@ class _DefenseCell extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        TypeBadge(type: type),
+        TypeBadge.iconOnly(type: type),
         const SizedBox(height: 10),
         Text(
           _formatMultiplier(multiplier),

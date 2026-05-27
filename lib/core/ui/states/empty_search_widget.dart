@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:pokedex/app/theme/app_colors.dart';
-import 'package:pokedex/app/theme/app_typography.dart';
+import 'package:pokedex/core/ui/states/state_view.dart';
 
 /// Empty-state for the search/discovery query path (TE-04).
 ///
@@ -21,33 +20,15 @@ class EmptySearchWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.search_off,
-              size: 48,
-              color: AppColors.textGray,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'No Pokémon found for "$query".',
-              textAlign: TextAlign.center,
-              style: AppTypography.description,
-            ),
-            if (onClear != null) ...[
-              const SizedBox(height: 16),
-              TextButton(
-                onPressed: onClear,
-                child: const Text('Clear search'),
-              ),
-            ],
-          ],
-        ),
-      ),
+    return StateView(
+      glyph: Icons.search_off,
+      title: 'No Pokémon found',
+      body:
+          'We couldn’t find anything for "$query". '
+          'Try a different name or National Pokédex number.',
+      actionLabel: onClear == null ? null : 'Clear search',
+      onAction: onClear,
+      actionStyle: StateActionStyle.secondary,
     );
   }
 }

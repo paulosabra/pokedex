@@ -10,10 +10,15 @@ import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 /// imports out of `lib/core/ui/`.
 class PokemonCard extends StatelessWidget {
   /// Creates a [PokemonCard].
-  const PokemonCard({required this.pokemon, super.key});
+  const PokemonCard({required this.pokemon, this.compact = false, super.key});
 
   /// The Pokémon to render.
   final Pokemon pokemon;
+
+  /// `true` to render the image-only variant on expanded breakpoints when the
+  /// list panel sits beside an open detail panel. See
+  /// [`core.PokemonCard.compact`].
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -24,6 +29,7 @@ class PokemonCard extends StatelessWidget {
       primaryType: types.first,
       secondaryType: types.length > 1 ? types[1] : null,
       imageUrl: pokemon.imageUrl,
+      compact: compact,
       onTap: () => context.go('/pokemon/${pokemon.id}'),
     );
   }

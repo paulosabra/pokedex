@@ -10,6 +10,7 @@ import 'package:pokedex/app/theme/app_typography.dart';
 import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/ui/components/pokemon_card.dart' as core;
 import 'package:pokedex/core/ui/components/search_field.dart';
+import 'package:pokedex/core/ui/components/shimmer_box.dart';
 import 'package:pokedex/core/ui/states/empty_filter_widget.dart';
 import 'package:pokedex/core/ui/states/empty_generation_widget.dart';
 import 'package:pokedex/core/ui/states/empty_search_widget.dart';
@@ -36,7 +37,14 @@ import 'package:pokedex/features/pokemon/presentation/widgets/sheets/sort_sheet.
 /// modality is chosen by [ResponsiveLayout.showSheetOrDialog] at invocation.
 class PokemonListScreen extends ConsumerStatefulWidget {
   /// Creates the [PokemonListScreen].
-  const PokemonListScreen({super.key});
+  const PokemonListScreen({this.compact = false, super.key});
+
+  /// `true` when this screen is rendered as the **master panel** of the
+  /// expanded-breakpoint master-detail layout. In compact mode every card
+  /// collapses to the image-only `PokemonCard` variant so the list reads as a
+  /// dense gallery beside the open detail panel — the screen itself keeps
+  /// its scroll behaviour, header and search field unchanged.
+  final bool compact;
 
   @override
   ConsumerState<PokemonListScreen> createState() => _PokemonListScreenState();
@@ -155,6 +163,7 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
                     async: async,
                     scrollController: _scrollController,
                     breakpoint: breakpoint,
+                    compact: widget.compact,
                     onRefresh: _refresh,
                     onClearSearch: _clearSearch,
                     onClearFilter: _clearFilter,
@@ -270,6 +279,7 @@ class _Body extends ConsumerWidget {
     required this.async,
     required this.scrollController,
     required this.breakpoint,
+    required this.compact,
     required this.onRefresh,
     required this.onClearSearch,
     required this.onClearFilter,
@@ -278,6 +288,7 @@ class _Body extends ConsumerWidget {
   final AsyncValue<PokemonListState> async;
   final ScrollController scrollController;
   final Breakpoint breakpoint;
+  final bool compact;
   final Future<void> Function() onRefresh;
   final VoidCallback onClearSearch;
   final VoidCallback onClearFilter;
@@ -320,6 +331,7 @@ class _Body extends ConsumerWidget {
           state: state,
           scrollController: scrollController,
           columns: ResponsiveLayout.gridColumns(breakpoint),
+          compact: compact,
         ),
       );
     }
@@ -339,11 +351,13 @@ class _PokemonGrid extends StatelessWidget {
     required this.state,
     required this.scrollController,
     required this.columns,
+    required this.compact,
   });
 
   final PokemonListState state;
   final ScrollController scrollController;
   final int columns;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -360,7 +374,7 @@ class _PokemonGrid extends StatelessWidget {
         separatorBuilder: (_, _) => const SizedBox(height: 15),
         itemBuilder: (context, index) {
           if (index >= items.length) return const _FooterSpinner();
-          return PokemonCard(pokemon: items[index]);
+          return PokemonCard(pokemon: items[index], compact: compact);
         },
       );
     }
@@ -381,39 +395,43 @@ class _PokemonGrid extends StatelessWidget {
       itemCount: itemCount,
       itemBuilder: (context, index) {
         if (index >= items.length) return const _FooterSpinner();
-        return PokemonCard(pokemon: items[index]);
+        return PokemonCard(pokemon: items[index], compact: compact);
       },
     );
   }
 }
 
+/// Bottom-of-list placeholder while a "load more" page is in flight — a single
+/// shimmer-animated card so the visual language matches the initial-load
+/// skeleton instead of an out-of-place spinner.
 class _FooterSpinner extends StatelessWidget {
   const _FooterSpinner();
 
   @override
   Widget build(BuildContext context) {
     return const Padding(
-      padding: EdgeInsets.symmetric(vertical: 16),
-      child: Center(child: CircularProgressIndicator()),
+      padding: EdgeInsets.symmetric(vertical: 8),
+      child: AppShimmer(
+        child: SkeletonBox(height: core.PokemonCard.height),
+      ),
     );
   }
 }
 
+/// Initial-load placeholder list — four shimmer cards under a single
+/// [AppShimmer] so the gradient sweep reads as one coherent surface loading.
 class _SkeletonList extends StatelessWidget {
   const _SkeletonList();
 
   @override
   Widget build(BuildContext context) {
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(40, 0, 40, 16),
-      itemCount: 4,
-      separatorBuilder: (_, _) => const SizedBox(height: 15),
-      itemBuilder: (_, _) => Container(
-        height: core.PokemonCard.height,
-        decoration: BoxDecoration(
-          color: AppColors.backgroundInput,
-          borderRadius: BorderRadius.circular(10),
-        ),
+    return AppShimmer(
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(40, 0, 40, 16),
+        itemCount: 4,
+        separatorBuilder: (_, _) => const SizedBox(height: 15),
+        itemBuilder: (_, _) =>
+            const SkeletonBox(height: core.PokemonCard.height),
       ),
     );
   }

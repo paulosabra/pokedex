@@ -130,6 +130,12 @@ class PokemonDao extends DatabaseAccessor<AppDatabase>
       if (generationId != null) {
         statement.where((t) => t.generationId.equals(generationId));
       }
+      final range = filter.numberRange;
+      if (range != null) {
+        statement.where(
+          (t) => t.id.isBetweenValues(range.min, range.max),
+        );
+      }
     }
 
     statement.orderBy([_ordering(sort)]);

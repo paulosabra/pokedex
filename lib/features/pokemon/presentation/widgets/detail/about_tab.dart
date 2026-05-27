@@ -241,7 +241,8 @@ class _WeaknessesRow extends StatelessWidget {
                   spacing: 6,
                   runSpacing: 6,
                   children: [
-                    for (final type in weaknesses) TypeBadge(type: type),
+                    for (final type in weaknesses)
+                      TypeBadge.iconOnly(type: type),
                   ],
                 ),
         ),

@@ -11,16 +11,30 @@ import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
 /// Outcome returned by [`FiltersSheet`] via [`Navigator.pop`].
 ///
 /// Wrapped in a record so the caller can distinguish a drag-to-dismiss
-/// (showModalBottomSheet returns `null`) from an explicit Apply/Clear (returns
+/// (showModalBottomSheet returns `null`) from an explicit Apply (returns
 /// a record with `value` set to the new filter or `null`).
 typedef FiltersSheetResult = ({PokemonFilter? value});
 
-/// The Filters sheet (RF-12..RF-16).
+/// Inclusive National-Dex id range covered by the Number Range section.
+const int _kNumberRangeMin = 1;
+
+/// Upper bound used by the Number Range slider. Covers Generations I–VIII
+/// (the dataset the app ships with). When PokéAPI extends, bump this.
+const int _kNumberRangeMax = 898;
+
+/// Double-typed copies of the range bounds so they can appear in
+/// `const RangeValues(...)` expressions (the int version requires
+/// `toDouble()`, which is not a const-evaluable method).
+const double _kNumberRangeMinD = 1;
+const double _kNumberRangeMaxD = 898;
+
+/// The Filters sheet (RF-12..RF-16, Figma `Filters - Scrolled`).
 ///
-/// Renders four sections — Types, Weaknesses, Heights, Weights — using the
-/// circular `Icon / *` and `Height/Weight / *` Components from Figma (e.g.
-/// `63:5694` unselected and `63:5974` selected). Selecting a button toggles
-/// it; Apply pops the sheet with the assembled [PokemonFilter] (UC-03).
+/// Renders five sections — Types, Weaknesses, Heights, Weights, Number Range
+/// — using the circular `Icon / *` and `Height/Weight / *` Components from
+/// Figma. The footer hosts a Reset / Apply pair: Reset clears the local draft
+/// (without popping); Apply pops the sheet with the assembled
+/// [PokemonFilter] (UC-03).
 class FiltersSheet extends StatefulWidget {
   /// Creates a [FiltersSheet] preloaded with [initial].
   const FiltersSheet({this.initial, super.key});
@@ -37,22 +51,35 @@ class _FiltersSheetState extends State<FiltersSheet> {
   late Set<PokemonTypeId> _weaknesses;
   HeightCategory? _height;
   WeightCategory? _weight;
+  late RangeValues _numberRange;
 
   @override
   void initState() {
     super.initState();
-    final initial = widget.initial;
-    _types = {...?initial?.types};
-    _weaknesses = {...?initial?.weaknesses};
-    _height = initial?.height;
-    _weight = initial?.weight;
+    _loadFrom(widget.initial);
   }
+
+  void _loadFrom(PokemonFilter? source) {
+    _types = {...?source?.types};
+    _weaknesses = {...?source?.weaknesses};
+    _height = source?.height;
+    _weight = source?.weight;
+    final range = source?.numberRange;
+    _numberRange = range == null
+        ? const RangeValues(_kNumberRangeMinD, _kNumberRangeMaxD)
+        : RangeValues(range.min.toDouble(), range.max.toDouble());
+  }
+
+  bool get _isDefaultRange =>
+      _numberRange.start.round() == _kNumberRangeMin &&
+      _numberRange.end.round() == _kNumberRangeMax;
 
   bool get _isEmpty =>
       _types.isEmpty &&
       _weaknesses.isEmpty &&
       _height == null &&
-      _weight == null;
+      _weight == null &&
+      _isDefaultRange;
 
   void _toggleIn(Set<PokemonTypeId> bucket, PokemonTypeId type) {
     setState(() {
@@ -68,8 +95,12 @@ class _FiltersSheetState extends State<FiltersSheet> {
     setState(() => _weight = weight);
   }
 
-  void _clear() {
-    Navigator.of(context).pop<FiltersSheetResult>((value: null));
+  void _setNumberRange(RangeValues values) {
+    setState(() => _numberRange = values);
+  }
+
+  void _reset() {
+    setState(() => _loadFrom(null));
   }
 
   void _apply() {
@@ -84,59 +115,67 @@ class _FiltersSheetState extends State<FiltersSheet> {
         height: _height,
         weight: _weight,
         generationId: widget.initial?.generationId,
+        numberRange: _isDefaultRange
+            ? null
+            : (
+                min: _numberRange.start.round(),
+                max: _numberRange.end.round(),
+              ),
       ),
     ));
   }
 
   @override
   Widget build(BuildContext context) {
-    final activeCount =
-        _types.length +
-        _weaknesses.length +
-        (_height == null ? 0 : 1) +
-        (_weight == null ? 0 : 1);
     return AppBottomSheet(
-      title: 'Filters${activeCount == 0 ? '' : ' ($activeCount)'}',
-      titleTrailing: TextButton(
-        onPressed: _isEmpty ? null : _clear,
-        child: const Text('Clear'),
-      ),
-      primaryAction: SizedBox(
-        width: double.infinity,
-        child: ElevatedButton(onPressed: _apply, child: const Text('Apply')),
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _FilterSection(
-              title: 'Types',
-              child: _TypeIconGrid(
-                bucket: 'type',
-                selected: _types,
-                onToggle: (t) => _toggleIn(_types, t),
+      title: 'Filters',
+      subtitle:
+          'Use advanced search to explore Pokémon by type, weakness, height '
+          'and more!',
+      primaryAction: _FilterFooter(onReset: _reset, onApply: _apply),
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _FilterSection(
+                title: 'Types',
+                child: _TypeIconGrid(
+                  bucket: 'type',
+                  selected: _types,
+                  onToggle: (t) => _toggleIn(_types, t),
+                ),
               ),
-            ),
-            const SizedBox(height: 24),
-            _FilterSection(
-              title: 'Weaknesses',
-              child: _TypeIconGrid(
-                bucket: 'weakness',
-                selected: _weaknesses,
-                onToggle: (t) => _toggleIn(_weaknesses, t),
+              const SizedBox(height: 24),
+              _FilterSection(
+                title: 'Weaknesses',
+                child: _TypeIconGrid(
+                  bucket: 'weakness',
+                  selected: _weaknesses,
+                  onToggle: (t) => _toggleIn(_weaknesses, t),
+                ),
               ),
-            ),
-            const SizedBox(height: 24),
-            _FilterSection(
-              title: 'Heights',
-              child: _HeightPicker(value: _height, onChanged: _setHeight),
-            ),
-            const SizedBox(height: 24),
-            _FilterSection(
-              title: 'Weights',
-              child: _WeightPicker(value: _weight, onChanged: _setWeight),
-            ),
-          ],
+              const SizedBox(height: 24),
+              _FilterSection(
+                title: 'Heights',
+                child: _HeightPicker(value: _height, onChanged: _setHeight),
+              ),
+              const SizedBox(height: 24),
+              _FilterSection(
+                title: 'Weights',
+                child: _WeightPicker(value: _weight, onChanged: _setWeight),
+              ),
+              const SizedBox(height: 24),
+              _FilterSection(
+                title: 'Number Range',
+                child: _NumberRangeSlider(
+                  values: _numberRange,
+                  onChanged: _setNumberRange,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -244,6 +283,123 @@ class _WeightPicker extends StatelessWidget {
           ),
           if (category != categories.last) const SizedBox(width: 12),
         ],
+      ],
+    );
+  }
+}
+
+/// Range slider section bound to the National-Dex id window. The slider's
+/// active track and thumb adopt `actionPrimary` to match Figma's
+/// `Filters - Scrolled` mock.
+class _NumberRangeSlider extends StatelessWidget {
+  const _NumberRangeSlider({required this.values, required this.onChanged});
+
+  final RangeValues values;
+  final ValueChanged<RangeValues> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = SliderTheme.of(context).copyWith(
+      activeTrackColor: AppColors.actionPrimary,
+      inactiveTrackColor: AppColors.backgroundInput,
+      thumbColor: AppColors.backgroundWhite,
+      overlayColor: AppColors.actionPrimary.withValues(alpha: 0.16),
+      rangeThumbShape: const RoundRangeSliderThumbShape(
+        enabledThumbRadius: 9,
+      ),
+      trackHeight: 3,
+      rangeValueIndicatorShape: const PaddleRangeSliderValueIndicatorShape(),
+      valueIndicatorColor: AppColors.actionPrimary,
+      showValueIndicator: ShowValueIndicator.onDrag,
+    );
+
+    return SliderTheme(
+      data: theme,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          RangeSlider(
+            values: values,
+            min: _kNumberRangeMin.toDouble(),
+            max: _kNumberRangeMax.toDouble(),
+            divisions: _kNumberRangeMax - _kNumberRangeMin,
+            labels: RangeLabels(
+              values.start.round().toString(),
+              values.end.round().toString(),
+            ),
+            onChanged: onChanged,
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                values.start.round().toString(),
+                style: AppTypography.pokemonNumber.copyWith(
+                  color: AppColors.textGray,
+                ),
+              ),
+              Text(
+                values.end.round().toString(),
+                style: AppTypography.pokemonNumber.copyWith(
+                  color: AppColors.textGray,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Footer row: a flat grey **Reset** on the left, a red **Apply** on the
+/// right (Figma `Filters - Scrolled` 268:1739). Reset reverts the local draft
+/// — it does not pop the sheet so the user can tweak again before applying.
+class _FilterFooter extends StatelessWidget {
+  const _FilterFooter({required this.onReset, required this.onApply});
+
+  final VoidCallback onReset;
+  final VoidCallback onApply;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: SizedBox(
+            height: 60,
+            child: TextButton(
+              onPressed: onReset,
+              style: TextButton.styleFrom(
+                backgroundColor: AppColors.backgroundInput,
+                foregroundColor: AppColors.textGray,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              child: const Text('Reset'),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: SizedBox(
+            height: 60,
+            child: ElevatedButton(
+              onPressed: onApply,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.actionPrimary,
+                foregroundColor: AppColors.textWhite,
+                elevation: 10,
+                shadowColor: AppColors.actionPrimary.withValues(alpha: 0.3),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              child: const Text('Apply'),
+            ),
+          ),
+        ),
       ],
     );
   }
