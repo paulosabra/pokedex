@@ -44,4 +44,18 @@ abstract class PokemonFilter with _$PokemonFilter {
     WeightCategory? weight,
     int? generationId,
   }) = _PokemonFilter;
+
+  /// Required by Freezed to expose [isEmpty] as a derived getter.
+  const PokemonFilter._();
+
+  /// `true` when no filter axis is active. Lives on the entity so callers
+  /// don't have to enumerate fields (and silently fall behind if a new axis
+  /// is added later). The Home View uses this to disambiguate
+  /// "filter excludes everything" from "no filter active, generation only".
+  bool get isEmpty =>
+      types.isEmpty &&
+      weaknesses.isEmpty &&
+      height == null &&
+      weight == null &&
+      generationId == null;
 }

@@ -3,10 +3,19 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:pokedex/app/layout/breakpoints.dart';
+import 'package:pokedex/app/layout/responsive_layout.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
+import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/ui/components/pokemon_card.dart' as core;
 import 'package:pokedex/core/ui/components/search_field.dart';
+import 'package:pokedex/core/ui/states/empty_filter_widget.dart';
+import 'package:pokedex/core/ui/states/empty_generation_widget.dart';
+import 'package:pokedex/core/ui/states/empty_search_widget.dart';
+import 'package:pokedex/core/ui/states/generic_error_widget.dart';
+import 'package:pokedex/core/ui/states/offline_error_widget.dart';
+import 'package:pokedex/core/ui/states/stale_cache_banner.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
 import 'package:pokedex/features/pokemon/presentation/state/pokemon_list_state.dart';
 import 'package:pokedex/features/pokemon/presentation/view_models/pokemon_list_view_model.dart';
@@ -20,7 +29,11 @@ import 'package:pokedex/features/pokemon/presentation/widgets/sheets/sort_sheet.
 /// Matches the Figma Home mockup (`321:675`): no AppBar — instead a custom
 /// header with the Pokeball watermark, the Generation/Sort/Filter icons in
 /// the top-right corner, a 32pt Bold "Pokédex" title, a 16pt Regular subtitle,
-/// the search field, and a single-column scrollable list of `PokemonCard`s.
+/// the search field, and a scrollable list/grid of `PokemonCard`s adapted to
+/// the active breakpoint (1 / 2 / 3 columns at compact / medium / expanded).
+///
+/// Error/empty states route through `lib/core/ui/states/`; sheet vs dialog
+/// modality is chosen by [ResponsiveLayout.showSheetOrDialog] at invocation.
 class PokemonListScreen extends ConsumerStatefulWidget {
   /// Creates the [PokemonListScreen].
   const PokemonListScreen({super.key});
@@ -30,8 +43,6 @@ class PokemonListScreen extends ConsumerStatefulWidget {
 }
 
 class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
-  static const double _loadMoreThreshold = 200;
-
   late final ScrollController _scrollController;
   late final TextEditingController _searchController;
 
@@ -54,7 +65,7 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
   void _onScroll() {
     if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
-    if (pos.pixels >= pos.maxScrollExtent - _loadMoreThreshold) {
+    if (pos.pixels >= pos.maxScrollExtent) {
       unawaited(
         ref.read(pokemonListViewModelProvider.notifier).loadMore(),
       );
@@ -62,9 +73,8 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
   }
 
   Future<void> _openFilters(PokemonListState state) async {
-    final result = await showModalBottomSheet<FiltersSheetResult>(
+    final result = await ResponsiveLayout.showSheetOrDialog<FiltersSheetResult>(
       context: context,
-      isScrollControlled: true,
       builder: (_) => FiltersSheet(initial: state.filter),
     );
     if (!mounted || result == null) return;
@@ -72,9 +82,8 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
   }
 
   Future<void> _openSort(PokemonListState state) async {
-    final result = await showModalBottomSheet<SortCriteria?>(
+    final result = await ResponsiveLayout.showSheetOrDialog<SortCriteria?>(
       context: context,
-      isScrollControlled: true,
       builder: (_) => SortSheet(initial: state.sort),
     );
     if (!mounted || result == null) return;
@@ -82,21 +91,35 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
   }
 
   Future<void> _openGenerations(PokemonListState state) async {
-    final result = await showModalBottomSheet<GenerationsSheetResult>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => GenerationsSheet(initial: state.generationId),
-    );
+    final result =
+        await ResponsiveLayout.showSheetOrDialog<GenerationsSheetResult>(
+          context: context,
+          builder: (_) => GenerationsSheet(initial: state.generationId),
+        );
     if (!mounted || result == null) return;
     ref
         .read(pokemonListViewModelProvider.notifier)
         .selectGeneration(result.value);
   }
 
+  void _clearSearch() {
+    _searchController.clear();
+    ref.read(pokemonListViewModelProvider.notifier).search('');
+  }
+
+  void _clearFilter() {
+    ref.read(pokemonListViewModelProvider.notifier).applyFilter(null);
+  }
+
+  Future<void> _refresh() {
+    return ref.read(pokemonListViewModelProvider.notifier).refresh();
+  }
+
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(pokemonListViewModelProvider);
     final state = async.value;
+    final breakpoint = Breakpoint.of(context);
 
     return Scaffold(
       backgroundColor: AppColors.backgroundWhite,
@@ -123,10 +146,18 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
                   ),
                 ),
                 const SizedBox(height: 20),
+                if (state != null && state.refreshError != null) ...[
+                  const StaleCacheBanner(),
+                  const SizedBox(height: 12),
+                ],
                 Expanded(
                   child: _Body(
                     async: async,
                     scrollController: _scrollController,
+                    breakpoint: breakpoint,
+                    onRefresh: _refresh,
+                    onClearSearch: _clearSearch,
+                    onClearFilter: _clearFilter,
                   ),
                 ),
               ],
@@ -235,62 +266,135 @@ class _HeaderIcon extends StatelessWidget {
 }
 
 class _Body extends ConsumerWidget {
-  const _Body({required this.async, required this.scrollController});
+  const _Body({
+    required this.async,
+    required this.scrollController,
+    required this.breakpoint,
+    required this.onRefresh,
+    required this.onClearSearch,
+    required this.onClearFilter,
+  });
 
   final AsyncValue<PokemonListState> async;
   final ScrollController scrollController;
+  final Breakpoint breakpoint;
+  final Future<void> Function() onRefresh;
+  final VoidCallback onClearSearch;
+  final VoidCallback onClearFilter;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final state = async.value;
+
+    // Pure error path: no usable state to fall back on. Checked BEFORE the
+    // skeleton branch — Riverpod can emit `AsyncLoading.copyWithPrevious(
+    // AsyncError)` immediately after a failed build, which has both
+    // `isLoading == true` and `hasError == true`. Showing the error widget
+    // in that frame is the right behavior (the user sees the failure, not a
+    // misleading spinner).
+    if (state == null && async.hasError) {
+      final error = async.error;
+      if (error is NetworkFailure || error is CacheFailure) {
+        return OfflineErrorWidget(onRetry: onRefresh);
+      }
+      return GenericErrorWidget(onRetry: onRefresh);
+    }
+
+    // Initial load with no cached state yet.
     if (async.isLoading && state == null) {
       return const _SkeletonList();
     }
+
     if (state == null) {
-      // Pure error with no previous data; PR4 will swap this for a richer
-      // error widget. For PR2 we render a minimal message + retry.
-      return _ErrorBlock(
-        onRetry: () =>
-            ref.read(pokemonListViewModelProvider.notifier).refresh(),
+      // Defensive — the prior branches cover loading and error; this only
+      // fires if the AsyncValue is in some unexpected new shape. Render the
+      // generic widget instead of leaving the body blank (PRD §8.1).
+      return GenericErrorWidget(onRetry: onRefresh);
+    }
+
+    // We have items — render them (with optional stale banner already above).
+    if (state.items.isNotEmpty) {
+      return RefreshIndicator(
+        onRefresh: onRefresh,
+        child: _PokemonGrid(
+          state: state,
+          scrollController: scrollController,
+          columns: ResponsiveLayout.gridColumns(breakpoint),
+        ),
       );
     }
-    if (state.items.isEmpty && !async.isLoading) {
-      return _EmptyBlock(state: state);
-    }
-    return RefreshIndicator(
-      onRefresh: () =>
-          ref.read(pokemonListViewModelProvider.notifier).refresh(),
-      child: _PokemonList(state: state, scrollController: scrollController),
+
+    // No items, no refresh in flight — pick the right empty variant.
+    return _EmptyState(
+      state: state,
+      onClearSearch: onClearSearch,
+      onClearFilter: onClearFilter,
+      onRetry: onRefresh,
     );
   }
 }
 
-class _PokemonList extends StatelessWidget {
-  const _PokemonList({required this.state, required this.scrollController});
+class _PokemonGrid extends StatelessWidget {
+  const _PokemonGrid({
+    required this.state,
+    required this.scrollController,
+    required this.columns,
+  });
 
   final PokemonListState state;
   final ScrollController scrollController;
+  final int columns;
 
   @override
   Widget build(BuildContext context) {
     final items = state.items;
     final showFooterSpinner = state.isLoadingMore;
     final itemCount = items.length + (showFooterSpinner ? 1 : 0);
-    return ListView.separated(
+
+    if (columns == 1) {
+      return ListView.separated(
+        key: const PageStorageKey<String>('pokemon-list'),
+        controller: scrollController,
+        padding: const EdgeInsets.fromLTRB(40, 0, 40, 16),
+        itemCount: itemCount,
+        separatorBuilder: (_, _) => const SizedBox(height: 15),
+        itemBuilder: (context, index) {
+          if (index >= items.length) return const _FooterSpinner();
+          return PokemonCard(pokemon: items[index]);
+        },
+      );
+    }
+
+    // Multi-column layouts use a grid. The card's intrinsic stacked layout
+    // needs the full 130 logical px of height regardless of column count, so
+    // we lock `mainAxisExtent` instead of letting the grid stretch the tile.
+    return GridView.builder(
       key: const PageStorageKey<String>('pokemon-list'),
       controller: scrollController,
       padding: const EdgeInsets.fromLTRB(40, 0, 40, 16),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: columns,
+        mainAxisExtent: core.PokemonCard.height,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 15,
+      ),
       itemCount: itemCount,
-      separatorBuilder: (_, _) => const SizedBox(height: 15),
       itemBuilder: (context, index) {
-        if (index >= items.length) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 16),
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
+        if (index >= items.length) return const _FooterSpinner();
         return PokemonCard(pokemon: items[index]);
       },
+    );
+  }
+}
+
+class _FooterSpinner extends StatelessWidget {
+  const _FooterSpinner();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 16),
+      child: Center(child: CircularProgressIndicator()),
     );
   }
 }
@@ -315,58 +419,37 @@ class _SkeletonList extends StatelessWidget {
   }
 }
 
-class _EmptyBlock extends StatelessWidget {
-  const _EmptyBlock({required this.state});
+class _EmptyState extends StatelessWidget {
+  const _EmptyState({
+    required this.state,
+    required this.onClearSearch,
+    required this.onClearFilter,
+    required this.onRetry,
+  });
 
   final PokemonListState state;
+  final VoidCallback onClearSearch;
+  final VoidCallback onClearFilter;
+  final Future<void> Function() onRetry;
 
-  String _message() {
+  @override
+  Widget build(BuildContext context) {
+    // TE-04: search returned no results — show the query verbatim.
     if (state.query.isNotEmpty) {
-      // TE-04
-      return 'No Pokémon found for "${state.query}".';
+      return EmptySearchWidget(query: state.query, onClear: onClearSearch);
     }
-    // TE-05 / RN-15 partial-generation case (refined widget lands in PR4)
-    return 'No Pokémon match the current filters.';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Text(
-          _message(),
-          textAlign: TextAlign.center,
-          style: AppTypography.description,
-        ),
-      ),
-    );
-  }
-}
-
-class _ErrorBlock extends StatelessWidget {
-  const _ErrorBlock({required this.onRetry});
-
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Something went wrong loading Pokémon.',
-              textAlign: TextAlign.center,
-              style: AppTypography.description,
-            ),
-            const SizedBox(height: 12),
-            ElevatedButton(onPressed: onRetry, child: const Text('Retry')),
-          ],
-        ),
-      ),
-    );
+    // RN-15: partial-generation backfill — distinct from "filter excludes
+    // everything" because the recovery is "refresh to fetch missing data".
+    // `state.filter?.isEmpty ?? true` keeps `PokemonFilter`'s field
+    // enumeration where it belongs (the entity), so a new filter axis
+    // doesn't silently break this branch.
+    if (state.generationId != null && (state.filter?.isEmpty ?? true)) {
+      return EmptyGenerationWidget(
+        generationLabel: 'Gen ${state.generationId}',
+        onRetry: () => unawaited(onRetry()),
+      );
+    }
+    // TE-05: a filter is active but no rows satisfy the intersection.
+    return EmptyFilterWidget(onClear: onClearFilter);
   }
 }

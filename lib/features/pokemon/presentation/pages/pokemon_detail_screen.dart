@@ -2,12 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
+import 'package:pokedex/app/layout/master_detail_scaffold.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
 import 'package:pokedex/app/theme/pokemon_type_theme.dart';
 import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
+import 'package:pokedex/core/ui/states/generic_error_widget.dart';
+import 'package:pokedex/core/ui/states/offline_error_widget.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_detail.dart';
+import 'package:pokedex/features/pokemon/presentation/pages/pokemon_list_screen.dart';
 import 'package:pokedex/features/pokemon/presentation/view_models/pokemon_detail_view_model.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/detail/about_tab.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/detail/detail_header.dart';
@@ -33,10 +37,17 @@ class PokemonDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(pokemonDetailViewModelProvider(id));
-    return async.when(
+    final body = async.when(
       data: (detail) => _Loaded(detail: detail),
       loading: () => const _Loading(),
       error: (error, _) => _Error(error: error),
+    );
+    // RF-46: on expanded breakpoints, frame the detail as the right panel of
+    // a master-detail layout with the list rendering as the master panel.
+    // `MasterDetailScaffold` returns [body] verbatim on compact/medium.
+    return MasterDetailScaffold(
+      masterBuilder: (_) => const PokemonListScreen(),
+      child: body,
     );
   }
 }
@@ -224,45 +235,22 @@ class _Error extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isOffline = error is NetworkFailure || error is CacheFailure;
+    // No AppBar — the error widget's centered CTA is the single Back
+    // affordance (resolved review finding: two back affordances confuse users
+    // and split visual focus).
     return Scaffold(
       backgroundColor: AppColors.backgroundWhite,
-      appBar: AppBar(
-        backgroundColor: AppColors.backgroundWhite,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: AppColors.textBlack),
-          tooltip: 'Back',
-          onPressed: () => _back(context),
-        ),
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                isOffline ? Icons.cloud_off : Icons.error_outline,
-                size: 48,
-                color: AppColors.textGray,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                isOffline
-                    ? 'You are offline and this Pokémon is not cached.'
-                    : 'Could not load this Pokémon.',
-                textAlign: TextAlign.center,
-                style: AppTypography.description,
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () => _back(context),
-                child: const Text('Back'),
-              ),
-            ],
-          ),
-        ),
-      ),
+      body: isOffline
+          ? OfflineErrorWidget(
+              message: 'You are offline and this Pokémon is not cached.',
+              retryLabel: 'Back',
+              onRetry: () => _back(context),
+            )
+          : GenericErrorWidget(
+              message: 'Could not load this Pokémon.',
+              retryLabel: 'Back',
+              onRetry: () => _back(context),
+            ),
     );
   }
 }

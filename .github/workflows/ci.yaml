@@ -22,11 +22,13 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          # Tracks the latest stable SDK. Package resolution is pinned by the
-          # committed pubspec.lock; if a future stable breaks resolution, pin the
-          # SDK here instead, e.g.:
-          #   flutter-version: 3.44.0
+          # Pinned for deterministic builds AND golden stability: golden
+          # baselines are rendered by a specific engine/Skia + bundled font,
+          # so an unpinned `stable` can shift sub-pixel anti-aliasing and break
+          # pixel tests on an SDK bump. Keep this in sync with the version used
+          # to (re)generate goldens — see .github/workflows/update-goldens.yml.
           channel: stable
+          flutter-version: 3.44.0
 
       - name: Install dependencies
         run: flutter pub get
