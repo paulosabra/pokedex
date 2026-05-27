@@ -6,12 +6,15 @@ import 'package:mocktail/mocktail.dart';
 import 'package:pokedex/app/app.dart';
 import 'package:pokedex/app/router/app_router.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
+import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/error/result.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_page.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/find_pokemon.dart';
+import 'package:pokedex/features/pokemon/domain/usecases/get_evolution_chain.dart';
+import 'package:pokedex/features/pokemon/domain/usecases/get_pokemon_detail.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/get_pokemon_list.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/watch_pokemon_list.dart';
 import 'package:pokedex/features/pokemon/presentation/pages/pokemon_detail_screen.dart';
@@ -22,6 +25,10 @@ class _MockGetPokemonList extends Mock implements GetPokemonList {}
 class _MockFindPokemon extends Mock implements FindPokemon {}
 
 class _MockWatchPokemonList extends Mock implements WatchPokemonList {}
+
+class _MockGetPokemonDetail extends Mock implements GetPokemonDetail {}
+
+class _MockGetEvolutionChain extends Mock implements GetEvolutionChain {}
 
 GoRouter _routerAt(String location) => GoRouter(
   initialLocation: location,
@@ -94,13 +101,28 @@ void main() {
     expect(find.byType(PokemonListScreen), findsOneWidget);
   });
 
-  testWidgets('deep-linking to /pokemon/25 renders the detail placeholder', (
+  testWidgets('deep-linking to /pokemon/25 mounts the detail screen', (
     tester,
   ) async {
+    final getDetail = _MockGetPokemonDetail();
+    final getChain = _MockGetEvolutionChain();
+    // Stub Err so the loading-state CircularProgressIndicator doesn't trap
+    // pumpAndSettle in an indefinite animation. The deep-link smoke only
+    // verifies the screen mounts with the parsed id — content rendering is
+    // covered by the dedicated detail-screen tests.
+    when(
+      () => getDetail.call(any()),
+    ).thenAnswer((_) async => const Err(NetworkFailure()));
+    when(
+      () => getChain.call(any()),
+    ).thenAnswer((_) async => const Err(NetworkFailure()));
+
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           routerProvider.overrideWith((ref) => _routerAt('/pokemon/25')),
+          getPokemonDetailProvider.overrideWithValue(getDetail),
+          getEvolutionChainProvider.overrideWithValue(getChain),
         ],
         child: const PokedexApp(),
       ),
