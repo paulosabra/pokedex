@@ -6,13 +6,13 @@ import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
 import 'package:pokedex/core/ui/components/type_badge.dart';
 import 'package:pokedex/core/utils/string_utils.dart';
 
-/// The colored detail-screen header — Figma `Profile #1 - About` (`268:320`).
+/// The colored detail-screen header — Figma `Profile #2 - About` (`321:416`).
 ///
 /// Renders the back-button row, the watermark species name, the artwork-in-
-/// circle on the left, and the number/name/badges stack on the right. Lives
-/// directly under the screen's green background (the [Scaffold]'s
-/// `backgroundColor` is the type background tint, so this widget only paints
-/// its content).
+/// circle on the left, the dot-pattern decoration in the top-right, and the
+/// number/name/badges stack. Lives directly under the screen's tinted
+/// background (the [Scaffold]'s `backgroundColor` is the type background
+/// tint, so this widget only paints its content).
 class DetailHeader extends StatelessWidget {
   /// Creates a [DetailHeader].
   const DetailHeader({
@@ -70,7 +70,7 @@ class DetailHeader extends StatelessWidget {
                   fontFamily: AppTypography.fontFamily,
                   fontSize: 100,
                   fontWeight: FontWeight.w700,
-                  color: Color(0x1AFFFFFF),
+                  color: Color(0x40FFFFFF),
                   height: 1,
                 ),
                 maxLines: 1,
@@ -78,6 +78,13 @@ class DetailHeader extends StatelessWidget {
                 softWrap: false,
               ),
             ),
+          ),
+          const Positioned(
+            top: 40,
+            right: 25,
+            width: 126,
+            height: 82,
+            child: _DotPattern(),
           ),
           Positioned(
             left: 40,
@@ -221,4 +228,43 @@ class _ArtworkLoading extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 4×6 white-dot grid — Figma `Pattern` (`321:420` / `321:488`).
+class _DotPattern extends StatelessWidget {
+  const _DotPattern();
+
+  @override
+  Widget build(BuildContext context) {
+    return const CustomPaint(
+      size: Size(126, 82),
+      painter: _DotPatternPainter(),
+    );
+  }
+}
+
+class _DotPatternPainter extends CustomPainter {
+  const _DotPatternPainter();
+
+  static const _cols = 6;
+  static const _rows = 4;
+  static const _spacing = 22.0;
+  static const _radius = 2.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = AppColors.textWhite.withValues(alpha: 0.3);
+    for (var c = 0; c < _cols; c++) {
+      for (var r = 0; r < _rows; r++) {
+        canvas.drawCircle(
+          Offset(c * _spacing + _radius, r * _spacing + _radius),
+          _radius,
+          paint,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

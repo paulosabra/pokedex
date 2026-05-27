@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
@@ -101,35 +102,103 @@ class _Loaded extends StatelessWidget {
   }
 }
 
-class _Tabs extends StatelessWidget {
+/// Faint white pokeball watermark + the three-tab row. The pokeball tracks
+/// the active tab horizontally (Figma `Pokeball` `321:426` / `321:494`) so
+/// it sits behind whichever tab is currently selected, extending upward
+/// into the colored header via [Clip.none].
+class _Tabs extends StatefulWidget {
   const _Tabs();
 
   @override
+  State<_Tabs> createState() => _TabsState();
+}
+
+class _TabsState extends State<_Tabs> {
+  TabController? _controller;
+  Animation<double>? _animation;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final next = DefaultTabController.of(context);
+    if (_controller != next) {
+      _animation?.removeListener(_handleTick);
+      _controller = next;
+      _animation = next.animation;
+      _animation?.addListener(_handleTick);
+    }
+  }
+
+  @override
+  void dispose() {
+    _animation?.removeListener(_handleTick);
+    super.dispose();
+  }
+
+  void _handleTick() => setState(() {});
+
+  @override
   Widget build(BuildContext context) {
-    return const SizedBox(
+    final controller = _controller!;
+    final value = _animation?.value ?? controller.index.toDouble();
+    return SizedBox(
       height: 45,
-      child: TabBar(
-        indicatorColor: Colors.transparent,
-        dividerColor: Colors.transparent,
-        labelColor: AppColors.textWhite,
-        labelStyle: TextStyle(
-          fontFamily: AppTypography.fontFamily,
-          fontSize: 16,
-          fontWeight: FontWeight.w700,
-          color: AppColors.textWhite,
-        ),
-        unselectedLabelColor: Color(0x80FFFFFF),
-        unselectedLabelStyle: TextStyle(
-          fontFamily: AppTypography.fontFamily,
-          fontSize: 16,
-          fontWeight: FontWeight.w400,
-        ),
-        overlayColor: WidgetStatePropertyAll(Colors.transparent),
-        tabs: [
-          Tab(text: 'About'),
-          Tab(text: 'Stats'),
-          Tab(text: 'Evolution'),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final tabWidth = constraints.maxWidth / controller.length;
+          const pokeballSize = 100.0;
+          final left = tabWidth * value + (tabWidth - pokeballSize) / 2;
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Positioned(
+                left: left,
+                top: -pokeballSize / 2,
+                width: pokeballSize,
+                height: pokeballSize,
+                child: const _PokeballWatermark(),
+              ),
+              const TabBar(
+                indicatorColor: Colors.transparent,
+                dividerColor: Colors.transparent,
+                labelColor: AppColors.textWhite,
+                labelStyle: TextStyle(
+                  fontFamily: AppTypography.fontFamily,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textWhite,
+                ),
+                unselectedLabelColor: Color(0x80FFFFFF),
+                unselectedLabelStyle: TextStyle(
+                  fontFamily: AppTypography.fontFamily,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w400,
+                ),
+                overlayColor: WidgetStatePropertyAll(Colors.transparent),
+                tabs: [
+                  Tab(text: 'About'),
+                  Tab(text: 'Stats'),
+                  Tab(text: 'Evolution'),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _PokeballWatermark extends StatelessWidget {
+  const _PokeballWatermark();
+
+  @override
+  Widget build(BuildContext context) {
+    return SvgPicture.asset(
+      'assets/illustrations/pokeball.svg',
+      colorFilter: const ColorFilter.mode(
+        Color(0x33FFFFFF),
+        BlendMode.srcIn,
       ),
     );
   }

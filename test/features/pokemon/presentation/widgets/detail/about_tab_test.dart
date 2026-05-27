@@ -19,14 +19,18 @@ Future<void> _pump(WidgetTester tester, PokemonDetail detail) async {
 
 void main() {
   group('AboutTab', () {
-    testWidgets('renders the four entity sections', (tester) async {
+    testWidgets('renders the two Figma sections — Pokédex Data + Training', (
+      tester,
+    ) async {
       await _pump(tester, bulbasaurDetail());
       await tester.pumpAndSettle();
 
       expect(find.text('Pokédex Data'), findsOneWidget);
       expect(find.text('Training'), findsOneWidget);
-      expect(find.text('Breeding'), findsOneWidget);
-      expect(find.text('Location'), findsOneWidget);
+      // Breeding + Location are intentionally absent — Figma's About tab
+      // (Profile #2, node 321:416) specs only the two sections above.
+      expect(find.text('Breeding'), findsNothing);
+      expect(find.text('Location'), findsNothing);
     });
 
     testWidgets('renders Pokédex Data rows with formatted height + weight', (
@@ -71,16 +75,6 @@ void main() {
         expect(find.text('—'), findsNWidgets(4));
       },
     );
-
-    testWidgets('omits the Location section when locations are empty', (
-      tester,
-    ) async {
-      final detail = bulbasaurDetail().copyWith(locations: const []);
-      await _pump(tester, detail);
-      await tester.pumpAndSettle();
-
-      expect(find.text('Location'), findsNothing);
-    });
 
     testWidgets('golden — AboutTab for Bulbasaur', (tester) async {
       await _pump(tester, bulbasaurDetail());

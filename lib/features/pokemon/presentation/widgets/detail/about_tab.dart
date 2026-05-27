@@ -5,15 +5,17 @@ import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
 import 'package:pokedex/core/ui/components/type_badge.dart';
 import 'package:pokedex/core/utils/string_utils.dart';
 import 'package:pokedex/features/pokemon/domain/entities/ability.dart';
-import 'package:pokedex/features/pokemon/domain/entities/breeding.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_detail.dart';
 
-/// The detail-screen About tab — Figma `Profile #1 - About` (`268:320`).
+/// The detail-screen About tab — Figma `Profile #2 - About` (`321:416`).
 ///
-/// Renders the species description plus four section blocks (Pokédex Data,
-/// Training, Breeding, Location) covering RF-31..34. Title color is the
-/// Pokémon's primary type color (RN-04). Missing fields render as `—`
-/// (TE-10).
+/// Renders the species description plus the two section blocks the design
+/// specifies — **Pokédex Data** and **Training** — covering RF-31..33.
+/// Title color is the Pokémon's primary type color (RN-04). Missing fields
+/// render as `—` (TE-10). The Breeding and Location sections from the
+/// original plan are intentionally omitted: the Figma file's About tab does
+/// not include them, and per project convention Figma is the source of
+/// truth.
 class AboutTab extends StatelessWidget {
   /// Creates an [AboutTab].
   const AboutTab({required this.detail, required this.accent, super.key});
@@ -69,43 +71,6 @@ class AboutTab extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 30),
-          _Section(
-            title: 'Breeding',
-            accent: accent,
-            rows: [
-              _Row(
-                label: 'Egg Groups',
-                value: detail.breeding.eggGroups.isEmpty
-                    ? '—'
-                    : detail.breeding.eggGroups.join(', '),
-              ),
-              _Row(
-                label: 'Egg Cycles',
-                value: detail.breeding.eggCycles.toString(),
-              ),
-              _Row(
-                label: 'Gender',
-                value: _formatGender(detail.breeding.gender),
-              ),
-            ],
-          ),
-          if (detail.locations.isNotEmpty) ...[
-            const SizedBox(height: 30),
-            _Section(
-              title: 'Location',
-              accent: accent,
-              rows: [
-                for (final entry in detail.locations)
-                  _Row(
-                    label: entry.area,
-                    value: entry.versions.isEmpty
-                        ? '—'
-                        : entry.versions.join(', '),
-                  ),
-              ],
-            ),
-          ],
         ],
       ),
     );
@@ -125,14 +90,6 @@ class AboutTab extends StatelessWidget {
     if (kg <= 0) return '—';
     final lbs = (kg * 2.20462).toStringAsFixed(1);
     return '${kg.toStringAsFixed(1)}kg ($lbs lbs)';
-  }
-
-  String _formatGender(Gender gender) {
-    if (gender.isGenderless) return 'Genderless';
-    final male = gender.malePercent;
-    final female = gender.femalePercent;
-    if (male == null || female == null) return '—';
-    return '♂ ${male.toStringAsFixed(1)}% / ♀ ${female.toStringAsFixed(1)}%';
   }
 }
 
