@@ -44,43 +44,33 @@ Future<_Handle> _openSheet(
 
 void main() {
   group('SortSheet', () {
-    testWidgets('renders the four sort options', (tester) async {
+    testWidgets('renders the four Figma sort options', (tester) async {
       await _openSheet(tester, initial: SortCriteria.numberAsc);
 
       expect(find.text('Sort'), findsOneWidget);
-      expect(find.text('Number (ascending)'), findsOneWidget);
-      expect(find.text('Number (descending)'), findsOneWidget);
-      expect(find.text('Name (A → Z)'), findsOneWidget);
-      expect(find.text('Name (Z → A)'), findsOneWidget);
+      expect(find.text('Smallest number first'), findsOneWidget);
+      expect(find.text('Highest number first'), findsOneWidget);
+      expect(find.text('A-Z'), findsOneWidget);
+      expect(find.text('Z-A'), findsOneWidget);
     });
 
-    testWidgets('initial option is rendered as selected (radio checked)', (
-      tester,
-    ) async {
-      await _openSheet(tester, initial: SortCriteria.nameAsc);
+    testWidgets(
+      'tapping an option pops with the chosen criterion (tap = apply)',
+      (tester) async {
+        final handle = await _openSheet(
+          tester,
+          initial: SortCriteria.numberAsc,
+        );
 
-      expect(find.byIcon(Icons.radio_button_checked), findsOneWidget);
-      expect(find.byIcon(Icons.radio_button_unchecked), findsNWidgets(3));
-    });
+        await tester.tap(find.text('Z-A'));
+        await tester.pumpAndSettle();
 
-    testWidgets('selecting an option and applying pops with that criterion', (
-      tester,
-    ) async {
-      final handle = await _openSheet(
-        tester,
-        initial: SortCriteria.numberAsc,
-      );
+        final result = await handle.result;
+        expect(result, SortCriteria.nameDesc);
+      },
+    );
 
-      await tester.tap(find.text('Name (Z → A)'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Apply'));
-      await tester.pumpAndSettle();
-
-      final result = await handle.result;
-      expect(result, SortCriteria.nameDesc);
-    });
-
-    testWidgets('Apply without changing selection pops with the initial', (
+    testWidgets('tapping the initial selection still pops with it', (
       tester,
     ) async {
       final handle = await _openSheet(
@@ -88,11 +78,23 @@ void main() {
         initial: SortCriteria.nameAsc,
       );
 
-      await tester.tap(find.text('Apply'));
+      await tester.tap(find.text('A-Z'));
       await tester.pumpAndSettle();
 
       final result = await handle.result;
       expect(result, SortCriteria.nameAsc);
+    });
+
+    testWidgets('drag-to-dismiss pops null', (tester) async {
+      final handle = await _openSheet(
+        tester,
+        initial: SortCriteria.numberAsc,
+      );
+
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+
+      expect(await handle.result, isNull);
     });
 
     testWidgets('golden', (tester) async {

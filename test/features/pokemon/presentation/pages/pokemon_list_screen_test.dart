@@ -127,7 +127,7 @@ void main() {
       await _pumpScreen(tester, harness: harness);
       // First frame after pumpWidget — still loading.
       expect(find.byType(adapter.PokemonCard), findsNothing);
-      expect(find.byType(GridView), findsOneWidget);
+      expect(find.byType(ListView), findsOneWidget);
 
       completer.complete(const Ok(PokemonPage(hasMore: false)));
       await tester.pumpAndSettle();
@@ -137,7 +137,13 @@ void main() {
       tester,
     ) async {
       final harness = _makeHarness(firstPage: _page(1, 6), hasMore: false);
-      await _pumpScreen(tester, harness: harness);
+      // ListView lazily renders only viewport-visible cards. Use a tall
+      // surface so all six materialize without scrolling.
+      await _pumpScreen(
+        tester,
+        harness: harness,
+        size: const Size(420, 1600),
+      );
       await tester.pumpAndSettle();
 
       expect(find.byType(adapter.PokemonCard), findsNWidgets(6));
@@ -216,7 +222,7 @@ void main() {
         await _pumpScreen(tester, harness: harness);
         await tester.pumpAndSettle();
 
-        final scrollable = tester.widget<GridView>(find.byType(GridView));
+        final scrollable = tester.widget<ListView>(find.byType(ListView));
         final controller = scrollable.controller;
         expect(controller, isNotNull);
 

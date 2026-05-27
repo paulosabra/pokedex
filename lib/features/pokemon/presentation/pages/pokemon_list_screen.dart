@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
 import 'package:pokedex/core/ui/components/search_field.dart';
@@ -15,9 +16,10 @@ import 'package:pokedex/features/pokemon/presentation/widgets/sheets/sort_sheet.
 
 /// The Home / browse screen (UC-01..UC-05, UC-08).
 ///
-/// Renders the live `PokemonListViewModel` state, dispatches user intents
-/// (search, filter, sort, generation, refresh, loadMore), and opens the three
-/// discovery sheets.
+/// Matches the Figma `Home` frame (`268:0`): no AppBar — instead a custom
+/// header with the Pokeball watermark, the Generation/Sort/Filter icons in
+/// the top-right corner, a 32pt Bold "Pokédex" title, a 16pt Regular subtitle,
+/// the search field, and a single-column scrollable list of `PokemonCard`s.
 class PokemonListScreen extends ConsumerStatefulWidget {
   /// Creates the [PokemonListScreen].
   const PokemonListScreen({super.key});
@@ -64,7 +66,7 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
       isScrollControlled: true,
       builder: (_) => FiltersSheet(initial: state.filter),
     );
-    if (!mounted || result == null) return; // drag-to-dismiss
+    if (!mounted || result == null) return;
     ref.read(pokemonListViewModelProvider.notifier).applyFilter(result.value);
   }
 
@@ -84,7 +86,7 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
       isScrollControlled: true,
       builder: (_) => GenerationsSheet(initial: state.generationId),
     );
-    if (!mounted || result == null) return; // drag-to-dismiss
+    if (!mounted || result == null) return;
     ref
         .read(pokemonListViewModelProvider.notifier)
         .selectGeneration(result.value);
@@ -96,25 +98,38 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
     final state = async.value;
 
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: AppColors.backgroundWhite,
-        elevation: 0,
-        title: const Text('Pokédex', style: AppTypography.applicationTitle),
-      ),
-      body: Column(
+      backgroundColor: AppColors.backgroundWhite,
+      body: Stack(
         children: [
-          _SearchAndControlsRow(
-            controller: _searchController,
-            onSearchChanged: (q) =>
-                ref.read(pokemonListViewModelProvider.notifier).search(q),
-            onFilterTap: state == null ? null : () => _openFilters(state),
-            onSortTap: state == null ? null : () => _openSort(state),
-            onGenerationTap: state == null
-                ? null
-                : () => _openGenerations(state),
-          ),
-          Expanded(
-            child: _Body(async: async, scrollController: _scrollController),
+          const _HeaderPokeballWatermark(),
+          SafeArea(
+            child: Column(
+              children: [
+                _Header(
+                  onFilterTap: state == null ? null : () => _openFilters(state),
+                  onSortTap: state == null ? null : () => _openSort(state),
+                  onGenerationTap: state == null
+                      ? null
+                      : () => _openGenerations(state),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(40, 11, 40, 0),
+                  child: SearchField(
+                    controller: _searchController,
+                    onChanged: (q) => ref
+                        .read(pokemonListViewModelProvider.notifier)
+                        .search(q),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Expanded(
+                  child: _Body(
+                    async: async,
+                    scrollController: _scrollController,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -122,17 +137,32 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
   }
 }
 
-class _SearchAndControlsRow extends StatelessWidget {
-  const _SearchAndControlsRow({
-    required this.controller,
-    required this.onSearchChanged,
+/// The faint Pokeball motif behind the screen title — Figma frame `268:1`,
+/// anchored at top:-207 left:0 so only the lower half peeks through.
+class _HeaderPokeballWatermark extends StatelessWidget {
+  const _HeaderPokeballWatermark();
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: 0,
+      top: -207,
+      width: 414,
+      height: 414,
+      child: IgnorePointer(
+        child: SvgPicture.asset('assets/illustrations/pokeball.svg'),
+      ),
+    );
+  }
+}
+
+class _Header extends StatelessWidget {
+  const _Header({
     required this.onFilterTap,
     required this.onSortTap,
     required this.onGenerationTap,
   });
 
-  final TextEditingController controller;
-  final ValueChanged<String> onSearchChanged;
   final VoidCallback? onFilterTap;
   final VoidCallback? onSortTap;
   final VoidCallback? onGenerationTap;
@@ -140,32 +170,64 @@ class _SearchAndControlsRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(40, 16, 40, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: SearchField(
-              controller: controller,
-              onChanged: onSearchChanged,
-            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              _HeaderIcon(
+                asset: 'assets/icons/header/generation.svg',
+                tooltip: 'Generations',
+                onTap: onGenerationTap,
+              ),
+              const SizedBox(width: 20),
+              _HeaderIcon(
+                asset: 'assets/icons/header/sort.svg',
+                tooltip: 'Sort',
+                onTap: onSortTap,
+              ),
+              const SizedBox(width: 20),
+              _HeaderIcon(
+                asset: 'assets/icons/header/filter.svg',
+                tooltip: 'Filters',
+                onTap: onFilterTap,
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          IconButton(
-            tooltip: 'Filters',
-            onPressed: onFilterTap,
-            icon: const Icon(Icons.tune),
-          ),
-          IconButton(
-            tooltip: 'Sort',
-            onPressed: onSortTap,
-            icon: const Icon(Icons.sort),
-          ),
-          IconButton(
-            tooltip: 'Generations',
-            onPressed: onGenerationTap,
-            icon: const Icon(Icons.collections_bookmark_outlined),
+          const SizedBox(height: 35),
+          const Text('Pokédex', style: AppTypography.applicationTitle),
+          const SizedBox(height: 16),
+          const Text(
+            'Search for Pokémon by name or using the National Pokédex number.',
+            style: AppTypography.description,
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _HeaderIcon extends StatelessWidget {
+  const _HeaderIcon({
+    required this.asset,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final String asset;
+  final String tooltip;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkResponse(
+        onTap: onTap,
+        radius: 22,
+        child: SvgPicture.asset(asset, width: 25, height: 25),
       ),
     );
   }
@@ -181,7 +243,7 @@ class _Body extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = async.value;
     if (async.isLoading && state == null) {
-      return const _SkeletonGrid();
+      return const _SkeletonList();
     }
     if (state == null) {
       // Pure error with no previous data; PR4 will swap this for a richer
@@ -198,16 +260,13 @@ class _Body extends ConsumerWidget {
     return RefreshIndicator(
       onRefresh: () =>
           ref.read(pokemonListViewModelProvider.notifier).refresh(),
-      child: _PokemonGrid(
-        state: state,
-        scrollController: scrollController,
-      ),
+      child: _PokemonList(state: state, scrollController: scrollController),
     );
   }
 }
 
-class _PokemonGrid extends StatelessWidget {
-  const _PokemonGrid({required this.state, required this.scrollController});
+class _PokemonList extends StatelessWidget {
+  const _PokemonList({required this.state, required this.scrollController});
 
   final PokemonListState state;
   final ScrollController scrollController;
@@ -217,20 +276,18 @@ class _PokemonGrid extends StatelessWidget {
     final items = state.items;
     final showFooterSpinner = state.isLoadingMore;
     final itemCount = items.length + (showFooterSpinner ? 1 : 0);
-    return GridView.builder(
-      key: const PageStorageKey<String>('pokemon-list-grid'),
+    return ListView.separated(
+      key: const PageStorageKey<String>('pokemon-list'),
       controller: scrollController,
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 1.5,
-      ),
+      padding: const EdgeInsets.fromLTRB(40, 0, 40, 16),
       itemCount: itemCount,
+      separatorBuilder: (_, _) => const SizedBox(height: 15),
       itemBuilder: (context, index) {
         if (index >= items.length) {
-          return const Center(child: CircularProgressIndicator());
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Center(child: CircularProgressIndicator()),
+          );
         }
         return PokemonCard(pokemon: items[index]);
       },
@@ -238,21 +295,17 @@ class _PokemonGrid extends StatelessWidget {
   }
 }
 
-class _SkeletonGrid extends StatelessWidget {
-  const _SkeletonGrid();
+class _SkeletonList extends StatelessWidget {
+  const _SkeletonList();
 
   @override
   Widget build(BuildContext context) {
-    return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 1.5,
-      ),
-      itemCount: 6,
-      itemBuilder: (_, _) => DecoratedBox(
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(40, 0, 40, 16),
+      itemCount: 4,
+      separatorBuilder: (_, _) => const SizedBox(height: 15),
+      itemBuilder: (_, _) => Container(
+        height: 115,
         decoration: BoxDecoration(
           color: AppColors.backgroundInput,
           borderRadius: BorderRadius.circular(10),

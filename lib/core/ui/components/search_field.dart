@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
 
-/// A filled search input styled per the Figma `Text Field` component
-/// (Tech Spec §10.1 `backgroundInput`).
+/// A filled search input styled per the Figma `Text Field / Default` component
+/// (`329:1473`): 60h, 10r, `#F2F2F2` background, 20×20 search icon at left:25,
+/// 16pt Regular #747476 hint at left:55.
 ///
 /// Stateless — the caller owns the [controller] / [onChanged] callbacks so the
 /// field plays naturally with a ViewModel's debounced search intent (RF-10).
@@ -13,7 +14,7 @@ class SearchField extends StatelessWidget {
     this.controller,
     this.onChanged,
     this.onSubmitted,
-    this.hintText = 'Search',
+    this.hintText = 'What Pokémon are you looking for?',
     this.autofocus = false,
     super.key,
   });
@@ -28,7 +29,7 @@ class SearchField extends StatelessWidget {
   /// Called when the user submits the field (e.g., presses return).
   final ValueChanged<String>? onSubmitted;
 
-  /// Hint text shown when the field is empty.
+  /// Hint text shown when the field is empty. Defaults to the Figma copy.
   final String hintText;
 
   /// Whether the field should request focus on first build.
@@ -36,27 +37,31 @@ class SearchField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      onChanged: onChanged,
-      onSubmitted: onSubmitted,
-      autofocus: autofocus,
-      style: AppTypography.description.copyWith(color: AppColors.textBlack),
-      decoration: InputDecoration(
-        hintText: hintText,
-        hintStyle: AppTypography.description,
-        filled: true,
-        fillColor: AppColors.backgroundInput,
-        prefixIcon: const Padding(
-          padding: EdgeInsetsDirectional.only(start: 25, end: 10),
-          child: Icon(Icons.search, color: AppColors.textGray, size: 20),
+    return SizedBox(
+      height: 60,
+      child: TextField(
+        controller: controller,
+        onChanged: onChanged,
+        onSubmitted: onSubmitted,
+        autofocus: autofocus,
+        style: AppTypography.description.copyWith(color: AppColors.textBlack),
+        decoration: InputDecoration(
+          hintText: hintText,
+          hintStyle: AppTypography.description,
+          filled: true,
+          fillColor: AppColors.backgroundInput,
+          isDense: true,
+          prefixIcon: const Padding(
+            padding: EdgeInsetsDirectional.only(start: 25, end: 10),
+            child: Icon(Icons.search, color: AppColors.textGray, size: 20),
+          ),
+          prefixIconConstraints: const BoxConstraints(minWidth: 55),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide.none,
+          ),
+          contentPadding: const EdgeInsets.symmetric(vertical: 20),
         ),
-        prefixIconConstraints: const BoxConstraints(minHeight: 60),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide.none,
-        ),
-        contentPadding: const EdgeInsets.symmetric(vertical: 20),
       ),
     );
   }

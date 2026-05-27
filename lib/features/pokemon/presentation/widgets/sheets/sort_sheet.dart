@@ -6,8 +6,11 @@ import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
 
 /// The Sort sheet (RF-20..RF-23).
 ///
-/// Stateless to the caller: pass [initial], and the sheet pops the chosen
-/// [SortCriteria] via [Navigator.pop] (or `null` if dismissed). UC-04.
+/// Renders the four sort criteria as 60h-tall buttons matching the Figma
+/// `Button / Primary` (selected, `#EA5D60`) and `Button / Secondary`
+/// (unselected, `#F2F2F2`) tokens from frame `268:176`. Tapping a button
+/// selects the criterion and pops the sheet with that value — there is no
+/// explicit Apply button in the design (tap = apply). UC-04.
 class SortSheet extends StatefulWidget {
   /// Creates a [SortSheet] preloaded with [initial].
   const SortSheet({required this.initial, super.key});
@@ -20,50 +23,38 @@ class SortSheet extends StatefulWidget {
 }
 
 class _SortSheetState extends State<SortSheet> {
-  late SortCriteria _selected;
-
   static const _labels = <SortCriteria, String>{
-    SortCriteria.numberAsc: 'Number (ascending)',
-    SortCriteria.numberDesc: 'Number (descending)',
-    SortCriteria.nameAsc: 'Name (A → Z)',
-    SortCriteria.nameDesc: 'Name (Z → A)',
+    SortCriteria.numberAsc: 'Smallest number first',
+    SortCriteria.numberDesc: 'Highest number first',
+    SortCriteria.nameAsc: 'A-Z',
+    SortCriteria.nameDesc: 'Z-A',
   };
-
-  @override
-  void initState() {
-    super.initState();
-    _selected = widget.initial;
-  }
 
   @override
   Widget build(BuildContext context) {
     return AppBottomSheet(
       title: 'Sort',
-      primaryAction: SizedBox(
-        width: double.infinity,
-        child: ElevatedButton(
-          onPressed: () => Navigator.of(context).pop<SortCriteria>(_selected),
-          child: const Text('Apply'),
-        ),
-      ),
+      subtitle: 'Sort Pokémons alphabetically or by National Pokédex number!',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          for (final entry in _labels.entries)
-            _SortOption(
+          for (final entry in _labels.entries) ...[
+            _SortButton(
               label: entry.value,
-              selected: _selected == entry.key,
-              onTap: () => setState(() => _selected = entry.key),
+              selected: widget.initial == entry.key,
+              onTap: () => Navigator.of(context).pop<SortCriteria>(entry.key),
             ),
+            if (entry.key != _labels.keys.last) const SizedBox(height: 20),
+          ],
         ],
       ),
     );
   }
 }
 
-class _SortOption extends StatelessWidget {
-  const _SortOption({
+class _SortButton extends StatelessWidget {
+  const _SortButton({
     required this.label,
     required this.selected,
     required this.onTap,
@@ -75,29 +66,27 @@ class _SortOption extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-        child: Row(
-          children: [
-            Icon(
-              selected
-                  ? Icons.radio_button_checked
-                  : Icons.radio_button_unchecked,
-              color: selected ? AppColors.textBlack : AppColors.textGray,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                label,
-                style: AppTypography.description.copyWith(
-                  color: AppColors.textBlack,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
-                ),
+    return SizedBox(
+      height: 60,
+      child: Material(
+        color: selected ? AppColors.actionPrimary : AppColors.backgroundInput,
+        borderRadius: BorderRadius.circular(10),
+        elevation: selected ? 10 : 0,
+        shadowColor: selected
+            ? AppColors.actionPrimary.withValues(alpha: 0.3)
+            : Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Center(
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              style: AppTypography.description.copyWith(
+                color: selected ? AppColors.textWhite : AppColors.textGray,
               ),
             ),
-          ],
+          ),
         ),
       ),
     );

@@ -38,19 +38,19 @@ Future<Future<GenerationsSheetResult?>> _openSheet(
 
 void main() {
   group('GenerationsSheet', () {
-    testWidgets('renders title and the Gen 1 card', (tester) async {
+    testWidgets('renders the plural title and the Gen 1 card', (tester) async {
       await _openSheet(tester);
 
-      expect(find.text('Generation'), findsOneWidget);
-      expect(find.text('Generation I — Kanto'), findsOneWidget);
+      expect(find.text('Generations'), findsOneWidget);
+      expect(find.text('Generation I'), findsOneWidget);
     });
 
-    testWidgets('selecting a generation pops with its id', (tester) async {
+    testWidgets('tapping a generation pops with its id (tap = apply)', (
+      tester,
+    ) async {
       final future = await _openSheet(tester);
 
-      await tester.tap(find.text('Generation I — Kanto'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Apply'));
+      await tester.tap(find.text('Generation I'));
       await tester.pumpAndSettle();
 
       final result = await future;
@@ -58,14 +58,12 @@ void main() {
       expect(result!.value, 1);
     });
 
-    testWidgets('selecting the active generation again clears it', (
+    testWidgets('tapping the active generation again clears it', (
       tester,
     ) async {
       final future = await _openSheet(tester, initial: 1);
 
-      await tester.tap(find.text('Generation I — Kanto'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Apply'));
+      await tester.tap(find.text('Generation I'));
       await tester.pumpAndSettle();
 
       final result = await future;
@@ -75,9 +73,7 @@ void main() {
 
     testWidgets(
       'Clear pops with a null value even when a generation is active',
-      (
-        tester,
-      ) async {
+      (tester) async {
         final future = await _openSheet(tester, initial: 1);
 
         expect(find.text('Clear'), findsOneWidget);
@@ -98,22 +94,8 @@ void main() {
       expect(find.text('Clear'), findsNothing);
     });
 
-    testWidgets('Apply with no selection pops with a null value', (
-      tester,
-    ) async {
-      final future = await _openSheet(tester);
-
-      await tester.tap(find.text('Apply'));
-      await tester.pumpAndSettle();
-
-      final result = await future;
-      expect(result, isNotNull);
-      expect(result!.value, isNull);
-    });
-
     testWidgets(
-      'drag-to-dismiss pops `null` so caller leaves the generation untouched '
-      '(resolved VGV F1)',
+      'drag-to-dismiss pops `null` so caller leaves the generation untouched',
       (tester) async {
         final future = await _openSheet(tester, initial: 1);
 
