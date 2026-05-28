@@ -32,6 +32,16 @@ void main() {
       );
     });
 
+    test('getPokemonIndex hits /pokemon with limit only', () async {
+      final service = serviceReturning('{"count":2,"results":[]}');
+
+      final result = await service.getPokemonIndex(100000);
+
+      expect(result.count, 2);
+      // No offset query param — the full-catalogue fetch is a single page.
+      expect(url(), 'https://pokeapi.co/api/v2/pokemon?limit=100000');
+    });
+
     test('getPokemon hits /pokemon/{id}', () async {
       final service = serviceReturning(fixture('pokemon_bulbasaur.json'));
 

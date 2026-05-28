@@ -1,15 +1,20 @@
 import 'dart:async';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/error/result.dart';
+import 'package:pokedex/core/network/connectivity_provider.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
+import 'package:pokedex/features/pokemon/data/repositories/pokemon_repository_impl.dart';
+import 'package:pokedex/features/pokemon/domain/entities/index_state.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_page.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
+import 'package:pokedex/features/pokemon/domain/repositories/pokemon_repository.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/find_pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/get_pokemon_list.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/watch_pokemon_list.dart';
@@ -21,6 +26,10 @@ class _MockGetPokemonList extends Mock implements GetPokemonList {}
 class _MockFindPokemon extends Mock implements FindPokemon {}
 
 class _MockWatchPokemonList extends Mock implements WatchPokemonList {}
+
+class _MockRepository extends Mock implements PokemonRepository {}
+
+class _MockConnectivity extends Mock implements Connectivity {}
 
 // Slightly over the VM's 300 ms debounce — keeps the test responsive while
 // still letting the timer fire.
@@ -47,6 +56,8 @@ void main() {
   late _MockGetPokemonList getList;
   late _MockFindPokemon findPokemon;
   late _MockWatchPokemonList watchList;
+  late _MockRepository repository;
+  late _MockConnectivity connectivity;
   late StreamController<List<Pokemon>> cacheController;
   late ProviderContainer container;
 
@@ -65,6 +76,8 @@ void main() {
     getList = _MockGetPokemonList();
     findPokemon = _MockFindPokemon();
     watchList = _MockWatchPokemonList();
+    repository = _MockRepository();
+    connectivity = _MockConnectivity();
     cacheController = StreamController<List<Pokemon>>.broadcast();
 
     when(
@@ -91,11 +104,25 @@ void main() {
       ),
     ).thenAnswer((_) async => Ok(_page(100, 3)));
 
+    // Catalogue-coverage providers (IndexCoordinator / BackfillCoordinator)
+    // are stateless side-effects from the ViewModel's perspective; stub the
+    // shared repository + connectivity so the kickoff coroutine no-ops without
+    // surfacing errors.
+    when(repository.readIndexState).thenAnswer((_) async => IndexState.idle());
+    when(
+      () => connectivity.checkConnectivity(),
+    ).thenAnswer((_) async => [ConnectivityResult.none]);
+    when(() => connectivity.onConnectivityChanged).thenAnswer(
+      (_) => const Stream<List<ConnectivityResult>>.empty(),
+    );
+
     container = ProviderContainer(
       overrides: [
         getPokemonListProvider.overrideWithValue(getList),
         findPokemonProvider.overrideWithValue(findPokemon),
         watchPokemonListProvider.overrideWithValue(watchList),
+        pokemonRepositoryProvider.overrideWithValue(repository),
+        connectivityProvider.overrideWithValue(connectivity),
       ],
     );
   });

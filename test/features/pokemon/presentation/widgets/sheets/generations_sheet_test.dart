@@ -1,31 +1,58 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pokedex/features/pokemon/data/repositories/pokemon_repository_impl.dart';
+import 'package:pokedex/features/pokemon/domain/entities/index_state.dart';
+import 'package:pokedex/features/pokemon/domain/repositories/pokemon_repository.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/sheets/generations_sheet.dart';
+
+class _FakeRepository implements PokemonRepository {
+  _FakeRepository(this.indexState);
+
+  IndexState indexState;
+
+  @override
+  Future<IndexState> readIndexState() async => indexState;
+
+  @override
+  Future<List<int>> listGenerationMembers(int generationId) async => const [];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnsupportedError(
+    'Unexpected repository call ${invocation.memberName}',
+  );
+}
 
 Future<Future<GenerationsSheetResult?>> _openSheet(
   WidgetTester tester, {
   int? initial,
+  IndexState? indexState,
 }) async {
   await tester.binding.setSurfaceSize(const Size(420, 1000));
   addTearDown(() => tester.binding.setSurfaceSize(null));
 
+  final repo = _FakeRepository(indexState ?? IndexState.idle());
+
   final completer = Completer<GenerationsSheetResult?>();
   await tester.pumpWidget(
-    MaterialApp(
-      home: Builder(
-        builder: (context) => Scaffold(
-          body: ElevatedButton(
-            onPressed: () async {
-              final r = await showModalBottomSheet<GenerationsSheetResult>(
-                context: context,
-                isScrollControlled: true,
-                builder: (_) => GenerationsSheet(initial: initial),
-              );
-              completer.complete(r);
-            },
-            child: const Text('open'),
+    ProviderScope(
+      overrides: [pokemonRepositoryProvider.overrideWithValue(repo)],
+      child: MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: ElevatedButton(
+              onPressed: () async {
+                final r = await showModalBottomSheet<GenerationsSheetResult>(
+                  context: context,
+                  isScrollControlled: true,
+                  builder: (_) => GenerationsSheet(initial: initial),
+                );
+                completer.complete(r);
+              },
+              child: const Text('open'),
+            ),
           ),
         ),
       ),

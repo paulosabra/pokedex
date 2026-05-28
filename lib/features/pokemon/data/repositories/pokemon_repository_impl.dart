@@ -14,10 +14,12 @@ import 'package:pokedex/features/pokemon/data/dtos/location_area_encounter_dto.d
 import 'package:pokedex/features/pokemon/data/dtos/type_dto.dart';
 import 'package:pokedex/features/pokemon/data/mappers/cache_mapper.dart';
 import 'package:pokedex/features/pokemon/data/mappers/evolution_mapper.dart';
+import 'package:pokedex/features/pokemon/data/mappers/index_mapper.dart';
 import 'package:pokedex/features/pokemon/data/mappers/pokemon_detail_mapper.dart';
 import 'package:pokedex/features/pokemon/data/mappers/pokemon_mapper.dart';
 import 'package:pokedex/features/pokemon/data/mappers/type_effectiveness.dart';
 import 'package:pokedex/features/pokemon/domain/entities/evolution_chain.dart';
+import 'package:pokedex/features/pokemon/domain/entities/index_state.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_detail.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
@@ -127,6 +129,16 @@ class PokemonRepositoryImpl implements PokemonRepository {
     try {
       return Ok(await _composeDetail(id));
     } on Failure catch (failure) {
+      // A 404 here means the index promised a Pokémon the detail endpoint
+      // disagrees with — drop the ghost row so subsequent searches don't
+      // re-surface it.
+      if (failure is NotFoundFailure) {
+        try {
+          await _local.evictIndexRow(id);
+        } on Exception {
+          // Best-effort cleanup; never poison the user-facing error.
+        }
+      }
       return Err(failure);
     }
   }
@@ -167,9 +179,48 @@ class PokemonRepositoryImpl implements PokemonRepository {
     required SortCriteria sort,
     String? query,
     PokemonFilter? filter,
-  }) => _readSummaries(
-    _local.querySummaries(sort: sort, query: query, filter: filter),
-  );
+  }) async {
+    // Type/weakness/height/weight predicates live on PokemonSummaries (the
+    // index has no type or measurement columns), so when ANY of those axes
+    // are active we keep the existing summary-only intersection. Pure
+    // search and generation/numberRange queries can read the full index.
+    if (_filterRequiresSummaries(filter)) {
+      return _readSummaries(
+        _local.querySummaries(sort: sort, query: query, filter: filter),
+      );
+    }
+
+    try {
+      final indexRows = await _local.queryIndex(sort: sort, query: query);
+      if (indexRows.isEmpty) {
+        // Either the index hasn't loaded yet OR the search returned nothing.
+        // Fall back to summary search so a user's pre-index typing isn't
+        // empty by definition; if both are empty, the result is empty.
+        return _readSummaries(
+          _local.querySummaries(sort: sort, query: query, filter: filter),
+        );
+      }
+      final out = <Pokemon>[];
+      for (final row in indexRows) {
+        if (!_indexRowSatisfies(row, filter)) continue;
+        final summary = await _local.readSummary(row.id);
+        if (summary != null) {
+          final hydrated = _tryParse(() => pokemonFromRow(summary));
+          if (hydrated != null) {
+            out.add(hydrated);
+            continue;
+          }
+        }
+        out.add(skeletonFromIndexRow(row));
+      }
+      return Ok(out);
+    } on Exception {
+      // Drift reads throw `Exception` subtypes on failure; programmer errors
+      // (`TypeError`, `RangeError`) should propagate so they're caught in
+      // testing rather than masked as a user-facing cache miss.
+      return const Err(CacheFailure());
+    }
+  }
 
   @override
   Stream<List<Pokemon>> watchCachedSummaries({
@@ -185,6 +236,100 @@ class PokemonRepositoryImpl implements PokemonRepository {
             .whereType<Pokemon>()
             .toList(),
       );
+
+  @override
+  Future<IndexState> readIndexState() async {
+    final bounds = await _local.readIndexBounds();
+    if (bounds == null) return IndexState.idle();
+    final generationIds = await _local.listGenerationIds();
+    final indexedAt = await _local.readIndexSnapshotAt();
+    final isFresh = indexedAt != null && _isFresh(indexedAt, kPokemonIndexTtl);
+    return IndexState(
+      status: isFresh ? IndexStatus.ready : IndexStatus.stale,
+      minId: bounds.minId,
+      maxId: bounds.maxId,
+      totalCount: bounds.totalCount,
+      generationIds: generationIds.toSet(),
+      indexedAt: indexedAt,
+    );
+  }
+
+  @override
+  Future<Result<IndexState>> refreshIndex() async {
+    if (!await _isOnline()) return const Err(NetworkFailure());
+    try {
+      final response = await _remote.fetchIndex(limit: _indexFetchLimit);
+      final nowMs = _now().millisecondsSinceEpoch;
+      final companions = indexFromResponse(response, nowMs: nowMs);
+      if (companions.isNotEmpty) {
+        await _local.upsertIndex(companions);
+      }
+      return Ok(await readIndexState());
+    } on Failure catch (failure) {
+      return Err(failure);
+    }
+  }
+
+  @override
+  Future<List<int>> listGenerationMembers(int generationId) =>
+      _local.listGenerationMembers(generationId);
+
+  @override
+  Future<List<int>> listMissingSummaryIds({int? limit}) =>
+      _local.listMissingSummaryIds(limit: limit);
+
+  @override
+  Future<void> evictIndexEntry(int id) => _local.evictIndexRow(id);
+
+  @override
+  Future<Result<void>> hydrateSummary(int id) async {
+    if (!await _isOnline()) return const Err(NetworkFailure());
+    try {
+      final dto = await _remote.fetchPokemon(id);
+      final pokemon = pokemonFromDto(dto);
+      final relations = await _ensureAllTypeRelations();
+      final mask = computeTypeEffectiveness(
+        pokemon.types,
+        relations,
+      ).weaknessMask;
+      await _local.upsertSummaries([
+        summaryToCompanion(
+          pokemon,
+          heightDecimetres: dto.height,
+          weightHectograms: dto.weight,
+          weaknessMask: mask,
+          nowMs: _now().millisecondsSinceEpoch,
+        ),
+      ]);
+      return const Ok(null);
+    } on Failure catch (failure) {
+      return Err(failure);
+    }
+  }
+
+  /// Upper bound for the single `/pokemon` request that builds the index. The
+  /// PokéAPI is well above this today (~1300 rows); the round number leaves
+  /// headroom for the inevitable Gen X additions.
+  static const int _indexFetchLimit = 100000;
+
+  bool _filterRequiresSummaries(PokemonFilter? filter) {
+    if (filter == null) return false;
+    return filter.types.isNotEmpty ||
+        filter.weaknesses.isNotEmpty ||
+        filter.height != null ||
+        filter.weight != null;
+  }
+
+  bool _indexRowSatisfies(PokemonIndexRow row, PokemonFilter? filter) {
+    if (filter == null) return true;
+    final genId = filter.generationId;
+    if (genId != null && row.generationId != genId) return false;
+    final range = filter.numberRange;
+    if (range != null && (row.id < range.min || row.id > range.max)) {
+      return false;
+    }
+    return true;
+  }
 
   Future<Result<List<Pokemon>>> _readSummaries(
     Future<List<PokemonSummaryRow>> rowsFuture,
@@ -281,10 +426,7 @@ class PokemonRepositoryImpl implements PokemonRepository {
     }
   }
 
-  Future<bool> _isOnline() async {
-    final results = await _connectivity.checkConnectivity();
-    return results.any((result) => result != ConnectivityResult.none);
-  }
+  Future<bool> _isOnline() => isOnline(_connectivity);
 
   bool _isFresh(int updatedAtMs, Duration ttl) =>
       _now().millisecondsSinceEpoch - updatedAtMs <= ttl.inMilliseconds;

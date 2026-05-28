@@ -7,6 +7,8 @@ import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/find_pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/get_pokemon_list.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/watch_pokemon_list.dart';
+import 'package:pokedex/features/pokemon/presentation/coordinators/backfill_coordinator.dart';
+import 'package:pokedex/features/pokemon/presentation/coordinators/index_coordinator.dart';
 import 'package:pokedex/features/pokemon/presentation/state/pokemon_list_state.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -51,7 +53,19 @@ class PokemonListViewModel extends _$PokemonListViewModel {
 
     final initial = await _loadFirstPage();
     _subscribeBrowseStream(sort: SortCriteria.numberAsc);
+    // Page-0 is back in the UI — sequence the index fetch and the paced
+    // detail backfill behind the same connection pool, matching the plan's
+    // "Sequencing — first launch, online" diagram.
+    unawaited(_kickoffCatalogueCoverage());
     return initial;
+  }
+
+  Future<void> _kickoffCatalogueCoverage() async {
+    await ref.read(indexCoordinatorProvider.notifier).loadIfNeeded();
+    // Backfill is internally idempotent and gates on
+    // `IndexStatus.ready/stale`; calling here is safe even if the index
+    // failed (it bails fast).
+    unawaited(ref.read(backfillCoordinatorProvider.notifier).start());
   }
 
   /// UC-01: appends the next page when scrolled to the end.

@@ -27,11 +27,20 @@ class PokemonCard extends StatelessWidget {
     this.secondaryType,
     this.imageUrl = '',
     this.onTap,
+    this.compact = false,
     super.key,
   });
 
   /// Total stack height — the 115h body plus the 15px sprite overflow above it.
   static const double height = 130;
+
+  /// `true` to render the **image-only** variant used on expanded breakpoints
+  /// when the detail screen is open alongside the list (the master panel of
+  /// the master-detail layout). Drops the number, name and badges — the body
+  /// keeps the type tint and pokeball pattern from the full card, and the
+  /// sprite stays oversized so it overflows above the body just like the
+  /// full layout.
+  final bool compact;
 
   /// National Dex id, rendered as `#NNN` (RF-02).
   final int id;
@@ -54,6 +63,72 @@ class PokemonCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (compact) return _buildCompact();
+    return _buildFull();
+  }
+
+  Widget _buildCompact() {
+    final style = PokemonTypeTheme.styleOf(primaryType);
+    final card = SizedBox(
+      height: height,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // Type-tinted body with the pokeball pattern — same composition as
+          // _buildFull, just without the inner text/badges. Kept 15px below
+          // the top so the sprite can overflow upward and read as "bigger
+          // than the card", matching the full variant's rhythm.
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 15,
+            height: 115,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: ColoredBox(color: style.backgroundColor),
+                  ),
+                  Positioned.fill(
+                    child: SvgPicture.asset(
+                      'assets/illustrations/card_pattern.svg',
+                      fit: BoxFit.cover,
+                      alignment: Alignment.topLeft,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Sprite — centered horizontally and overflowing the body by 15px
+          // upward so the Pokémon reads as "bigger than the card", same as
+          // the full variant.
+          Positioned.fill(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: SizedBox(
+                width: 130,
+                height: 130,
+                child: _CardImage(imageUrl: imageUrl),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (onTap == null) return card;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: card,
+      ),
+    );
+  }
+
+  Widget _buildFull() {
     final style = PokemonTypeTheme.styleOf(primaryType);
     final secondary = secondaryType;
 

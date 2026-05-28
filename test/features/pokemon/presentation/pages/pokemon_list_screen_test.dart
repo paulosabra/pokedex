@@ -1,20 +1,25 @@
 import 'dart:async';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/error/result.dart';
+import 'package:pokedex/core/network/connectivity_provider.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
 import 'package:pokedex/core/ui/states/empty_generation_widget.dart';
 import 'package:pokedex/core/ui/states/generic_error_widget.dart';
 import 'package:pokedex/core/ui/states/offline_error_widget.dart';
 import 'package:pokedex/core/ui/states/stale_cache_banner.dart';
+import 'package:pokedex/features/pokemon/data/repositories/pokemon_repository_impl.dart';
+import 'package:pokedex/features/pokemon/domain/entities/index_state.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_page.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
+import 'package:pokedex/features/pokemon/domain/repositories/pokemon_repository.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/find_pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/get_pokemon_list.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/watch_pokemon_list.dart';
@@ -31,6 +36,43 @@ class _MockGetPokemonList extends Mock implements GetPokemonList {}
 class _MockFindPokemon extends Mock implements FindPokemon {}
 
 class _MockWatchPokemonList extends Mock implements WatchPokemonList {}
+
+class _StubRepository extends Mock implements PokemonRepository {}
+
+class _StubConnectivity extends Mock implements Connectivity {}
+
+/// Catalogue-coverage providers (IndexCoordinator / BackfillCoordinator) ride
+/// off the shared repository + connectivity, so a screen test needs both to be
+/// stubbed even when the test only exercises the list ViewModel. These
+/// defaults keep the kickoff coroutine a quiet no-op.
+({_StubRepository repo, _StubConnectivity connectivity})
+_catalogueCoverageStubs() {
+  final repo = _StubRepository();
+  final connectivity = _StubConnectivity();
+  // Return a `ready` index so any sheet opened during the test (Filters,
+  // Generations) renders its live components instead of the shimmer
+  // placeholder — shimmer's infinite animation never settles, so
+  // `pumpAndSettle` would otherwise hang the test indefinitely.
+  when(repo.readIndexState).thenAnswer(
+    (_) async => const IndexState(
+      status: IndexStatus.ready,
+      minId: 1,
+      maxId: 1025,
+      totalCount: 1025,
+      generationIds: {1, 2, 3, 4, 5, 6, 7, 8, 9},
+    ),
+  );
+  when(
+    () => repo.listGenerationMembers(any()),
+  ).thenAnswer((_) async => <int>[]);
+  when(
+    connectivity.checkConnectivity,
+  ).thenAnswer((_) async => [ConnectivityResult.none]);
+  when(() => connectivity.onConnectivityChanged).thenAnswer(
+    (_) => const Stream<List<ConnectivityResult>>.empty(),
+  );
+  return (repo: repo, connectivity: connectivity);
+}
 
 Pokemon _pokemon(int id, {String name = 'pkmn'}) => Pokemon(
   id: id,
@@ -107,12 +149,15 @@ Future<void> _pumpScreen(
   addTearDown(tester.view.resetDevicePixelRatio);
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(harness.cacheController.close);
+  final coverage = _catalogueCoverageStubs();
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         getPokemonListProvider.overrideWithValue(harness.getList),
         findPokemonProvider.overrideWithValue(harness.findPokemon),
         watchPokemonListProvider.overrideWithValue(harness.watch),
+        pokemonRepositoryProvider.overrideWithValue(coverage.repo),
+        connectivityProvider.overrideWithValue(coverage.connectivity),
       ],
       child: const MaterialApp(home: PokemonListScreen()),
     ),
