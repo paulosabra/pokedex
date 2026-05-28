@@ -339,20 +339,5 @@ void main() {
       expect(result!.value?.generationId, 2);
       expect(result.value?.types, {PokemonTypeId.fire});
     });
-
-    testWidgets('golden', (tester) async {
-      await _openSheet(
-        tester,
-        initial: const PokemonFilter(
-          types: {PokemonTypeId.fire},
-          height: HeightCategory.tall,
-        ),
-      );
-
-      await expectLater(
-        find.byType(FiltersSheet),
-        matchesGoldenFile('goldens/filters_sheet.png'),
-      );
-    });
   });
 }

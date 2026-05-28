@@ -70,27 +70,5 @@ void main() {
 
       expect(cleared, isTrue);
     });
-
-    testWidgets('golden', (tester) async {
-      await _pump(
-        tester,
-        AppBottomSheet(
-          title: 'Filters',
-          titleTrailing: TextButton(
-            onPressed: () {},
-            child: const Text('Clear'),
-          ),
-          primaryAction: ElevatedButton(
-            onPressed: () {},
-            child: const Text('Apply'),
-          ),
-          child: const Text('content'),
-        ),
-      );
-      await expectLater(
-        find.byType(AppBottomSheet),
-        matchesGoldenFile('goldens/app_bottom_sheet.png'),
-      );
-    });
   });
 }

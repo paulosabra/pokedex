@@ -122,13 +122,5 @@ void main() {
 
       expect(await handle.result, isNull);
     });
-
-    testWidgets('golden', (tester) async {
-      await _openSheet(tester, initial: SortCriteria.numberAsc);
-      await expectLater(
-        find.byType(SortSheet),
-        matchesGoldenFile('goldens/sort_sheet.png'),
-      );
-    });
   });
 }

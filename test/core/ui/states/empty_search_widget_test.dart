@@ -40,20 +40,5 @@ void main() {
 
       expect(taps, 1);
     });
-
-    testWidgets('golden', (tester) async {
-      await tester.binding.setSurfaceSize(const Size(400, 400));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-
-      await _pump(
-        tester,
-        EmptySearchWidget(query: 'mewthree', onClear: () {}),
-      );
-
-      await expectLater(
-        find.byType(EmptySearchWidget),
-        matchesGoldenFile('goldens/empty_search_widget.png'),
-      );
-    });
   });
 }

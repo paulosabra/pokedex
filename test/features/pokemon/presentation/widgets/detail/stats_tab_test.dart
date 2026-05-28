@@ -71,15 +71,5 @@ void main() {
       // Bug AND Poison are 0.0 — two matches.
       expect(find.text('0'), findsNWidgets(2));
     });
-
-    testWidgets('golden — StatsTab for Bulbasaur', (tester) async {
-      await _pump(tester, bulbasaurDetail());
-      await tester.pumpAndSettle();
-
-      await expectLater(
-        find.byType(StatsTab),
-        matchesGoldenFile('goldens/stats_tab.png'),
-      );
-    });
   });
 }

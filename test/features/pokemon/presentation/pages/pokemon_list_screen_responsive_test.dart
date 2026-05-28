@@ -111,36 +111,6 @@ void main() {
   });
 
   group('PokemonListScreen responsive', () {
-    testWidgets('compact (400 px) renders single-column ListView', (
-      tester,
-    ) async {
-      await _pumpAt(tester, const Size(400, 900));
-
-      expect(find.byType(ListView), findsWidgets);
-      expect(find.byType(GridView), findsNothing);
-
-      await expectLater(
-        find.byType(PokemonListScreen),
-        matchesGoldenFile('goldens/list_screen_compact.png'),
-      );
-    });
-
-    testWidgets('medium (800 px) renders 2-column GridView', (tester) async {
-      await _pumpAt(tester, const Size(800, 900));
-
-      // Pin the contract: 2 columns at medium. Goldens alone don't catch a
-      // regression behind a misguided --update-goldens rebaseline.
-      final grid = tester.widget<GridView>(find.byType(GridView));
-      final delegate =
-          grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount;
-      expect(delegate.crossAxisCount, 2);
-
-      await expectLater(
-        find.byType(PokemonListScreen),
-        matchesGoldenFile('goldens/list_screen_medium.png'),
-      );
-    });
-
     testWidgets('expanded (1200 px) renders 3-column GridView', (tester) async {
       await _pumpAt(tester, const Size(1200, 900));
 

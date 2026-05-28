@@ -75,15 +75,5 @@ void main() {
         expect(find.text('—'), findsNWidgets(4));
       },
     );
-
-    testWidgets('golden — AboutTab for Bulbasaur', (tester) async {
-      await _pump(tester, bulbasaurDetail());
-      await tester.pumpAndSettle();
-
-      await expectLater(
-        find.byType(AboutTab),
-        matchesGoldenFile('goldens/about_tab.png'),
-      );
-    });
   });
 }

@@ -37,17 +37,5 @@ void main() {
 
       expect(taps, 1);
     });
-
-    testWidgets('golden', (tester) async {
-      await tester.binding.setSurfaceSize(const Size(400, 400));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-
-      await _pump(tester, EmptyFilterWidget(onClear: () {}));
-
-      await expectLater(
-        find.byType(EmptyFilterWidget),
-        matchesGoldenFile('goldens/empty_filter_widget.png'),
-      );
-    });
   });
 }

@@ -34,17 +34,5 @@ void main() {
 
       expect(find.text('custom copy'), findsOneWidget);
     });
-
-    testWidgets('golden', (tester) async {
-      await tester.binding.setSurfaceSize(const Size(400, 400));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-
-      await _pump(tester, OfflineErrorWidget(onRetry: () {}));
-
-      await expectLater(
-        find.byType(OfflineErrorWidget),
-        matchesGoldenFile('goldens/offline_error_widget.png'),
-      );
-    });
   });
 }

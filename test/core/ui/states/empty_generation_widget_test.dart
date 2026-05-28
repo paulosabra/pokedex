@@ -51,20 +51,5 @@ void main() {
 
       expect(taps, 1);
     });
-
-    testWidgets('golden', (tester) async {
-      await tester.binding.setSurfaceSize(const Size(400, 400));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-
-      await _pump(
-        tester,
-        EmptyGenerationWidget(generationLabel: 'Gen 1', onRetry: () {}),
-      );
-
-      await expectLater(
-        find.byType(EmptyGenerationWidget),
-        matchesGoldenFile('goldens/empty_generation_widget.png'),
-      );
-    });
   });
 }

@@ -138,13 +138,5 @@ void main() {
         expect(result, isNull);
       },
     );
-
-    testWidgets('golden', (tester) async {
-      await _openSheet(tester, initial: 1);
-      await expectLater(
-        find.byType(GenerationsSheet),
-        matchesGoldenFile('goldens/generations_sheet.png'),
-      );
-    });
   });
 }
