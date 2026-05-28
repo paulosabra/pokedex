@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
@@ -6,7 +7,12 @@ import 'package:pokedex/app/theme/height_weight_theme.dart';
 import 'package:pokedex/app/theme/pokemon_type_theme.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
 import 'package:pokedex/core/ui/components/app_bottom_sheet.dart';
+import 'package:pokedex/core/ui/components/shimmer_box.dart';
+import 'package:pokedex/features/pokemon/domain/entities/index_state.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
+import 'package:pokedex/features/pokemon/presentation/coordinators/backfill_coordinator.dart';
+import 'package:pokedex/features/pokemon/presentation/coordinators/index_coordinator.dart';
+import 'package:pokedex/features/pokemon/presentation/coordinators/index_fallbacks.dart';
 
 /// Outcome returned by [`FiltersSheet`] via [`Navigator.pop`].
 ///
@@ -15,27 +21,15 @@ import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
 /// a record with `value` set to the new filter or `null`).
 typedef FiltersSheetResult = ({PokemonFilter? value});
 
-/// Inclusive National-Dex id range covered by the Number Range section.
-const int _kNumberRangeMin = 1;
-
-/// Upper bound used by the Number Range slider. Covers Generations I–VIII
-/// (the dataset the app ships with). When PokéAPI extends, bump this.
-const int _kNumberRangeMax = 898;
-
-/// Double-typed copies of the range bounds so they can appear in
-/// `const RangeValues(...)` expressions (the int version requires
-/// `toDouble()`, which is not a const-evaluable method).
-const double _kNumberRangeMinD = 1;
-const double _kNumberRangeMaxD = 898;
-
 /// The Filters sheet (RF-12..RF-16, Figma `Filters - Scrolled`).
 ///
 /// Renders five sections — Types, Weaknesses, Heights, Weights, Number Range
 /// — using the circular `Icon / *` and `Height/Weight / *` Components from
-/// Figma. The footer hosts a Reset / Apply pair: Reset clears the local draft
-/// (without popping); Apply pops the sheet with the assembled
-/// [PokemonFilter] (UC-03).
-class FiltersSheet extends StatefulWidget {
+/// Figma. The Number Range bounds are read from the live `IndexCoordinator`
+/// when available, falling back to `IndexFallbacks` (offline default) while
+/// the index is loading or has failed. The header shows
+/// `Filtering across X of Y Pokémon` while the backfill is hydrating.
+class FiltersSheet extends ConsumerStatefulWidget {
   /// Creates a [FiltersSheet] preloaded with [initial].
   const FiltersSheet({this.initial, super.key});
 
@@ -43,10 +37,10 @@ class FiltersSheet extends StatefulWidget {
   final PokemonFilter? initial;
 
   @override
-  State<FiltersSheet> createState() => _FiltersSheetState();
+  ConsumerState<FiltersSheet> createState() => _FiltersSheetState();
 }
 
-class _FiltersSheetState extends State<FiltersSheet> {
+class _FiltersSheetState extends ConsumerState<FiltersSheet> {
   late Set<PokemonTypeId> _types;
   late Set<PokemonTypeId> _weaknesses;
   HeightCategory? _height;
@@ -56,30 +50,41 @@ class _FiltersSheetState extends State<FiltersSheet> {
   @override
   void initState() {
     super.initState();
-    _loadFrom(widget.initial);
+    // Read whatever the index coordinator already has so the slider seeds
+    // with live bounds (1..max) when the sheet opens after page-0 — falling
+    // back to `IndexFallbacks` only when the index isn't ready yet.
+    final state = ref.read(indexCoordinatorProvider).value;
+    final isLive =
+        state?.status == IndexStatus.ready ||
+        state?.status == IndexStatus.stale;
+    final seedBounds = isLive && state?.minId != null
+        ? (min: state!.minId!, max: state.maxId!)
+        : IndexFallbacks.numberRangeBounds;
+    _loadFrom(widget.initial, seedBounds);
   }
 
-  void _loadFrom(PokemonFilter? source) {
+  void _loadFrom(PokemonFilter? source, ({int min, int max}) bounds) {
     _types = {...?source?.types};
     _weaknesses = {...?source?.weaknesses};
     _height = source?.height;
     _weight = source?.weight;
     final range = source?.numberRange;
     _numberRange = range == null
-        ? const RangeValues(_kNumberRangeMinD, _kNumberRangeMaxD)
+        ? RangeValues(bounds.min.toDouble(), bounds.max.toDouble())
         : RangeValues(range.min.toDouble(), range.max.toDouble());
   }
 
-  bool get _isDefaultRange =>
-      _numberRange.start.round() == _kNumberRangeMin &&
-      _numberRange.end.round() == _kNumberRangeMax;
+  bool _isDefaultRange(({int min, int max}) bounds) {
+    final range = _effectiveRange(bounds);
+    return range.start.round() == bounds.min && range.end.round() == bounds.max;
+  }
 
-  bool get _isEmpty =>
+  bool _isEmpty(({int min, int max}) bounds) =>
       _types.isEmpty &&
       _weaknesses.isEmpty &&
       _height == null &&
       _weight == null &&
-      _isDefaultRange;
+      _isDefaultRange(bounds);
 
   void _toggleIn(Set<PokemonTypeId> bucket, PokemonTypeId type) {
     setState(() {
@@ -99,15 +104,16 @@ class _FiltersSheetState extends State<FiltersSheet> {
     setState(() => _numberRange = values);
   }
 
-  void _reset() {
-    setState(() => _loadFrom(null));
+  void _reset(({int min, int max}) bounds) {
+    setState(() => _loadFrom(null, bounds));
   }
 
-  void _apply() {
-    if (_isEmpty) {
+  void _apply(({int min, int max}) bounds) {
+    if (_isEmpty(bounds)) {
       Navigator.of(context).pop<FiltersSheetResult>((value: null));
       return;
     }
+    final range = _effectiveRange(bounds);
     Navigator.of(context).pop<FiltersSheetResult>((
       value: PokemonFilter(
         types: Set.unmodifiable(_types),
@@ -115,24 +121,63 @@ class _FiltersSheetState extends State<FiltersSheet> {
         height: _height,
         weight: _weight,
         generationId: widget.initial?.generationId,
-        numberRange: _isDefaultRange
+        numberRange: _isDefaultRange(bounds)
             ? null
             : (
-                min: _numberRange.start.round(),
-                max: _numberRange.end.round(),
+                min: range.start.round(),
+                max: range.end.round(),
               ),
       ),
     ));
   }
 
+  /// Effective slider range for the current frame: prefers the user's
+  /// drafted values, but rebases the endpoints to [liveBounds] when the
+  /// index lands mid-sheet and the user hasn't touched the slider yet — so
+  /// the live ceiling appears without an explicit re-open.
+  ///
+  /// Pure: returns the value to render this frame; never mutates `_numberRange`
+  /// (avoids the build-is-pure-function anti-pattern).
+  RangeValues _effectiveRange(({int min, int max}) liveBounds) {
+    if (widget.initial?.numberRange != null) return _numberRange;
+    final at = (
+      min: _numberRange.start.round(),
+      max: _numberRange.end.round(),
+    );
+    const fallback = IndexFallbacks.numberRangeBounds;
+    if (at.min == fallback.min && at.max == fallback.max) {
+      return RangeValues(liveBounds.min.toDouble(), liveBounds.max.toDouble());
+    }
+    return _numberRange;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final indexState = ref.watch(indexCoordinatorProvider).value;
+    final isLive =
+        indexState?.status == IndexStatus.ready ||
+        indexState?.status == IndexStatus.stale;
+    final bounds = isLive && indexState?.minId != null
+        ? (min: indexState!.minId!, max: indexState.maxId!)
+        : IndexFallbacks.numberRangeBounds;
+    final sliderValues = isLive ? _effectiveRange(bounds) : _numberRange;
+
+    final progress = ref.watch(backfillCoordinatorProvider);
+    final total = indexState?.totalCount ?? progress.total;
+    final hydrated = progress.hydrated;
+    final headerSubtitle = _subtitleFor(
+      isLive: isLive,
+      hydrated: hydrated,
+      total: total,
+    );
+
     return AppBottomSheet(
       title: 'Filters',
-      subtitle:
-          'Use advanced search to explore Pokémon by type, weakness, height '
-          'and more!',
-      primaryAction: _FilterFooter(onReset: _reset, onApply: _apply),
+      subtitle: headerSubtitle,
+      primaryAction: _FilterFooter(
+        onReset: () => _reset(bounds),
+        onApply: () => _apply(bounds),
+      ),
       child: ScrollConfiguration(
         behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
         child: SingleChildScrollView(
@@ -170,7 +215,9 @@ class _FiltersSheetState extends State<FiltersSheet> {
               _FilterSection(
                 title: 'Number Range',
                 child: _NumberRangeSlider(
-                  values: _numberRange,
+                  values: sliderValues,
+                  bounds: bounds,
+                  enabled: isLive,
                   onChanged: _setNumberRange,
                 ),
               ),
@@ -179,6 +226,21 @@ class _FiltersSheetState extends State<FiltersSheet> {
         ),
       ),
     );
+  }
+
+  String _subtitleFor({
+    required bool isLive,
+    required int hydrated,
+    required int? total,
+  }) {
+    if (!isLive || total == null || total == 0) {
+      return 'Use advanced search to explore Pokémon by type, weakness, '
+          'height and more!';
+    }
+    if (hydrated >= total) {
+      return 'Filtering across all $total Pokémon';
+    }
+    return 'Filtering across $hydrated of $total Pokémon';
   }
 }
 
@@ -290,15 +352,33 @@ class _WeightPicker extends StatelessWidget {
 
 /// Range slider section bound to the National-Dex id window. The slider's
 /// active track and thumb adopt `actionPrimary` to match Figma's
-/// `Filters - Scrolled` mock.
+/// `Filters - Scrolled` mock. While the live index hasn't landed yet,
+/// the section renders a shimmer track and disables interaction — see the
+/// "Per-surface offline matrix" in the full-database-coverage plan.
 class _NumberRangeSlider extends StatelessWidget {
-  const _NumberRangeSlider({required this.values, required this.onChanged});
+  const _NumberRangeSlider({
+    required this.values,
+    required this.bounds,
+    required this.enabled,
+    required this.onChanged,
+  });
 
   final RangeValues values;
+  final ({int min, int max}) bounds;
+  final bool enabled;
   final ValueChanged<RangeValues> onChanged;
 
   @override
   Widget build(BuildContext context) {
+    if (!enabled) {
+      return const Tooltip(
+        message: 'Loading full catalogue…',
+        child: AppShimmer(
+          child: SkeletonBox(height: 56),
+        ),
+      );
+    }
+
     final theme = SliderTheme.of(context).copyWith(
       activeTrackColor: AppColors.actionPrimary,
       inactiveTrackColor: AppColors.backgroundInput,
@@ -320,9 +400,9 @@ class _NumberRangeSlider extends StatelessWidget {
         children: [
           RangeSlider(
             values: values,
-            min: _kNumberRangeMin.toDouble(),
-            max: _kNumberRangeMax.toDouble(),
-            divisions: _kNumberRangeMax - _kNumberRangeMin,
+            min: bounds.min.toDouble(),
+            max: bounds.max.toDouble(),
+            divisions: bounds.max - bounds.min,
             labels: RangeLabels(
               values.start.round().toString(),
               values.end.round().toString(),

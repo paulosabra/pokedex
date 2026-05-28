@@ -1,5 +1,6 @@
 import 'package:pokedex/core/error/result.dart';
 import 'package:pokedex/features/pokemon/domain/entities/evolution_chain.dart';
+import 'package:pokedex/features/pokemon/domain/entities/index_state.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_detail.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
@@ -43,4 +44,35 @@ abstract interface class PokemonRepository {
     required SortCriteria sort,
     PokemonFilter? filter,
   });
+
+  /// Reads the persisted index snapshot — bounds, generation set, and TTL
+  /// freshness — without touching the network. Returns
+  /// [IndexState.idle] when nothing has been cached yet. Cache state, so
+  /// the result is not wrapped in [Result].
+  Future<IndexState> readIndexState();
+
+  /// Fetches the full National-Dex index and replaces the cached snapshot,
+  /// returning the fresh [IndexState]. Requires connectivity; refresh
+  /// races are coalesced by the coordinator, not here.
+  Future<Result<IndexState>> refreshIndex();
+
+  /// All National-Dex ids belonging to [generationId] in the cached index,
+  /// ascending. Returns an empty list when the index is not loaded yet —
+  /// the Generations sheet falls back to `IndexFallbacks` in that case.
+  Future<List<int>> listGenerationMembers(int generationId);
+
+  /// National-Dex ids present in the index but missing from
+  /// `PokemonSummaries`. The backfill coordinator drains the result; the
+  /// query is stateless so a cold start naturally resumes.
+  Future<List<int>> listMissingSummaryIds({int? limit});
+
+  /// Drops an index row by id — used when a tap-into-detail returns 404
+  /// so the index never serves a ghost match on subsequent searches.
+  Future<void> evictIndexEntry(int id);
+
+  /// Fetches `/pokemon/{id}` and upserts the summary (and its weakness
+  /// mask) so subsequent `findPokemon` calls return a hydrated row.
+  /// Used by the backfill coordinator to drain the
+  /// `index - summaries` set.
+  Future<Result<void>> hydrateSummary(int id);
 }

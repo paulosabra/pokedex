@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
 import 'package:pokedex/core/ui/components/pokemon_card.dart' as core;
+import 'package:pokedex/core/ui/components/shimmer_box.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/pokemon_card.dart';
 
@@ -20,6 +21,16 @@ const _charmander = Pokemon(
   imageUrl: 'https://img/4.png',
   generationId: 1,
   types: [PokemonTypeId.fire],
+);
+
+/// Skeleton Pokémon — surfaced by the index-aware `findPokemon` for a row
+/// without a hydrated summary. `types` is empty by design — see
+/// `Pokemon.isSkeleton`.
+const _skeleton = Pokemon(
+  id: 445,
+  name: 'garchomp',
+  imageUrl: 'https://example.invalid/445.png',
+  generationId: 4,
 );
 
 Future<GoRouter> _pump(WidgetTester tester, Pokemon pokemon) async {
@@ -88,5 +99,41 @@ void main() {
 
       expect(_lastVisited[router]!(), '/pokemon/1');
     });
+  });
+
+  group('PokemonCard adapter — skeleton variant', () {
+    testWidgets(
+      'routes to _SkeletonPokemonCard when pokemon.isSkeleton',
+      (tester) async {
+        await _pump(tester, _skeleton);
+        // The full-card core widget must NOT be rendered for a skeleton row.
+        expect(find.byType(core.PokemonCard), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'renders id (#NNN), capitalized name and a shimmer placeholder',
+      (tester) async {
+        await _pump(tester, _skeleton);
+
+        expect(find.text('#445'), findsOneWidget);
+        expect(find.text('Garchomp'), findsOneWidget);
+        // Type badges are replaced by shimmer chips on a skeleton row.
+        expect(find.byType(AppShimmer), findsWidgets);
+        expect(find.byType(SkeletonBox), findsWidgets);
+      },
+    );
+
+    testWidgets(
+      'tap on a skeleton routes to /pokemon/<id> (hydrates on demand)',
+      (tester) async {
+        final router = await _pump(tester, _skeleton);
+
+        await tester.tap(find.text('Garchomp'));
+        await tester.pumpAndSettle();
+
+        expect(_lastVisited[router]!(), '/pokemon/445');
+      },
+    );
   });
 }

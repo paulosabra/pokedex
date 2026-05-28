@@ -20,6 +20,11 @@ abstract interface class PokemonRemoteDataSource {
     required int offset,
   });
 
+  /// Fetches the full National-Dex index in a single `GET /pokemon?limit={limit}`.
+  /// [limit] is intentionally a parameter (rather than baked at 100000) so the
+  /// repository can clamp under test or shrink for low-memory devices later.
+  Future<PokemonListResponseDto> fetchIndex({required int limit});
+
   /// Fetches a single Pokémon's core data.
   Future<PokemonDto> fetchPokemon(int id);
 
@@ -48,6 +53,10 @@ class PokemonRemoteDataSourceImpl implements PokemonRemoteDataSource {
     required int limit,
     required int offset,
   }) => _guard(() => _service.getPokemonList(limit, offset));
+
+  @override
+  Future<PokemonListResponseDto> fetchIndex({required int limit}) =>
+      _guard(() => _service.getPokemonIndex(limit));
 
   @override
   Future<PokemonDto> fetchPokemon(int id) =>

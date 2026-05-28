@@ -23,10 +23,23 @@ const _heavyMinHectograms = 500;
 /// Matches all digits, used to disambiguate number search from name search.
 final _allDigits = RegExp(r'^\d+$');
 
+/// Batch size for index bulk inserts. The 2026 brainstorm flags drift-web's
+/// IndexedDB transactions as the bottleneck at large batch sizes; 200 keeps
+/// each transaction commit comfortably under the worker's main-thread budget
+/// on mobile Safari while staying coarse enough that ~1300 rows arrive in
+/// ~7 transactions, not ~13. Drop to 50 if web measurements regress.
+const _indexUpsertBatchSize = 200;
+
 /// Drift implementation of [PokemonLocalDataSource]. All search/filter/sort
 /// runs as SQL over the cache for instant offline results (RN-08).
 @DriftAccessor(
-  tables: [PokemonSummaries, PokemonDetails, EvolutionChains, TypeRelations],
+  tables: [
+    PokemonSummaries,
+    PokemonDetails,
+    EvolutionChains,
+    TypeRelations,
+    PokemonIndex,
+  ],
 )
 class PokemonDao extends DatabaseAccessor<AppDatabase>
     with _$PokemonDaoMixin
@@ -173,6 +186,132 @@ class PokemonDao extends DatabaseAccessor<AppDatabase>
   }
 
   OrderingTerm Function($PokemonSummariesTable) _ordering(SortCriteria sort) {
+    switch (sort) {
+      case SortCriteria.numberAsc:
+        return (t) => OrderingTerm.asc(t.id);
+      case SortCriteria.numberDesc:
+        return (t) => OrderingTerm.desc(t.id);
+      case SortCriteria.nameAsc:
+        return (t) => OrderingTerm.asc(t.name);
+      case SortCriteria.nameDesc:
+        return (t) => OrderingTerm.desc(t.name);
+    }
+  }
+
+  // -- Index-aware queries (full-database coverage, schemaVersion 3) ---------
+
+  @override
+  Future<void> upsertIndex(List<PokemonIndexCompanion> rows) async {
+    if (rows.isEmpty) return;
+    // Drift opens its own transaction per `batch`, so we chunk explicitly and
+    // call `batch` once per chunk to keep each transaction commit bounded.
+    for (var start = 0; start < rows.length; start += _indexUpsertBatchSize) {
+      final end = (start + _indexUpsertBatchSize).clamp(0, rows.length);
+      final chunk = rows.sublist(start, end);
+      await batch((b) => b.insertAllOnConflictUpdate(pokemonIndex, chunk));
+    }
+  }
+
+  @override
+  Future<PokemonIndexBounds?> readIndexBounds() async {
+    final minExpr = pokemonIndex.id.min();
+    final maxExpr = pokemonIndex.id.max();
+    final countExpr = pokemonIndex.id.count();
+    final row = await (selectOnly(
+      pokemonIndex,
+    )..addColumns([minExpr, maxExpr, countExpr])).getSingle();
+    final min = row.read(minExpr);
+    final max = row.read(maxExpr);
+    final total = row.read(countExpr) ?? 0;
+    if (min == null || max == null || total == 0) return null;
+    return (minId: min, maxId: max, totalCount: total);
+  }
+
+  @override
+  Future<List<int>> listGenerationIds() async {
+    // DISTINCT generation_id, drop unknown generation 0, ascending.
+    final generationCol = pokemonIndex.generationId;
+    final query = selectOnly(pokemonIndex, distinct: true)
+      ..addColumns([generationCol])
+      ..where(generationCol.isBiggerThanValue(0))
+      ..orderBy([OrderingTerm.asc(generationCol)]);
+    final rows = await query.get();
+    return rows.map((r) => r.read(generationCol)!).toList();
+  }
+
+  @override
+  Future<List<int>> listGenerationMembers(int generationId) async {
+    final rows =
+        await (select(pokemonIndex)
+              ..where((t) => t.generationId.equals(generationId))
+              ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+            .get();
+    return rows.map((r) => r.id).toList();
+  }
+
+  @override
+  Future<void> evictIndexRow(int id) =>
+      (delete(pokemonIndex)..where((t) => t.id.equals(id))).go();
+
+  @override
+  Future<int?> readIndexSnapshotAt() async {
+    // Every row in a single `/pokemon` upsert shares the same `indexedAt`,
+    // so `MAX(indexed_at)` is the cheapest read of the snapshot clock and
+    // tolerates legacy mixed-snapshot rows from a partial upsert recovery.
+    final indexedAtExpr = pokemonIndex.indexedAt.max();
+    final row = await (selectOnly(
+      pokemonIndex,
+    )..addColumns([indexedAtExpr])).getSingle();
+    return row.read(indexedAtExpr);
+  }
+
+  @override
+  Future<List<PokemonIndexRow>> queryIndex({
+    required SortCriteria sort,
+    String? query,
+  }) => _indexQuery(sort: sort, query: query).get();
+
+  @override
+  Stream<List<PokemonIndexRow>> watchIndex({
+    required SortCriteria sort,
+    String? query,
+  }) => _indexQuery(sort: sort, query: query).watch();
+
+  @override
+  Future<List<int>> listMissingSummaryIds({int? limit}) async {
+    // Subquery rather than LEFT JOIN: SQLite optimizes NOT EXISTS to an
+    // anti-join, and a JOIN would multiply rows when summaries are absent.
+    final missing = pokemonIndex.id.isNotInQuery(
+      selectOnly(pokemonSummaries)..addColumns([pokemonSummaries.id]),
+    );
+    var query = select(pokemonIndex)
+      ..where((_) => missing)
+      ..orderBy([(t) => OrderingTerm.asc(t.id)]);
+    if (limit != null) query = query..limit(limit);
+    final rows = await query.get();
+    return rows.map((r) => r.id).toList();
+  }
+
+  SimpleSelectStatement<$PokemonIndexTable, PokemonIndexRow> _indexQuery({
+    required SortCriteria sort,
+    String? query,
+  }) {
+    final statement = select(pokemonIndex);
+    final term = query?.trim() ?? '';
+    if (term.isNotEmpty) {
+      if (_allDigits.hasMatch(term)) {
+        final id = int.tryParse(term);
+        statement.where((t) => t.id.equals(id ?? -1));
+      } else {
+        final normalized = normalizeName(term);
+        statement.where((t) => t.nameNormalized.like('%$normalized%'));
+      }
+    }
+    statement.orderBy([_indexOrdering(sort)]);
+    return statement;
+  }
+
+  OrderingTerm Function($PokemonIndexTable) _indexOrdering(SortCriteria sort) {
     switch (sort) {
       case SortCriteria.numberAsc:
         return (t) => OrderingTerm.asc(t.id);
