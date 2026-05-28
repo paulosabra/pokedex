@@ -8,6 +8,14 @@ abstract final class AppTypography {
   /// The bundled font family used across the app.
   static const String fontFamily = 'SF Pro Display';
 
+  /// Big title.
+  static const TextStyle title = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 100,
+    fontWeight: FontWeight.w700,
+    color: AppColors.textWhite,
+  );
+
   /// "Pokédex" application title.
   static const TextStyle applicationTitle = TextStyle(
     fontFamily: fontFamily,
