@@ -1,52 +1,45 @@
 import 'dart:async';
-import 'dart:typed_data';
+import 'dart:developer';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// Maximum fraction of pixels that may differ before a golden is treated as a
-/// mismatch.
-///
-/// Golden baselines are regenerated on Linux to match CI exactly (see
-/// `.github/workflows/update-goldens.yml`) and the Flutter SDK is pinned in CI,
-/// so a freshly baselined run diffs at ~0%. This small tolerance only absorbs
-/// the residual sub-pixel anti-aliasing noise that can appear across host
-/// platforms (e.g. local macOS vs. Linux CI) and SDK patch releases, so a
-/// local run and CI agree without re-baselining on every machine.
-///
-/// Keep this low: a value too high would let real visual regressions slip
-/// through. 1% is enough for anti-aliasing jitter but well below the footprint
-/// of any meaningful layout or color change.
-const double _kGoldenDiffTolerance = 0.01; // 1%
+const double _kGoldenTestsThreshold = 0.01; // 1% tolerance
 
-/// Entry point picked up automatically by `flutter_test` for every test under
-/// this directory. It replaces the default zero-tolerance [LocalFileComparator]
-/// with a tolerant subclass that keeps each test file's own `goldens/`
-/// directory.
 Future<void> testExecutable(FutureOr<void> Function() testMain) async {
-  final defaultComparator = goldenFileComparator;
-  if (defaultComparator is LocalFileComparator) {
-    // `basedir` is @protected; reading it here is the only way to carry each
-    // test file's own `goldens/` directory into the tolerant comparator.
+  if (goldenFileComparator is LocalFileComparator) {
+    final testUrl = (goldenFileComparator as LocalFileComparator).basedir;
 
-    final goldensDir = defaultComparator.basedir;
-    goldenFileComparator = _TolerantGoldenFileComparator(
-      goldensDir,
-      tolerance: _kGoldenDiffTolerance,
+    goldenFileComparator = LocalFileComparatorWithThreshold(
+      Uri.parse('$testUrl/test. dart'),
+      _kGoldenTestsThreshold,
+    );
+  } else {
+    throw Exception(
+      'Expected goldenFileComparator to be of type '
+      'LocalFileComparator '
+      'but it is of type ${goldenFileComparator.runtimeType}',
     );
   }
-
   await testMain();
 }
 
-/// A [LocalFileComparator] that passes when the pixel diff stays within the
-/// configured tolerance. Anything above the threshold is deferred to the
-/// default comparison, which throws the standard failure and writes the usual
-/// `failures/` diff artifacts.
-class _TolerantGoldenFileComparator extends LocalFileComparator {
-  _TolerantGoldenFileComparator(super.testFile, {required this.tolerance});
+/// Works just like [LocalFileComparator] but includes a [threshold] that, when
+/// exceeded, marks the test as a failure.
+class LocalFileComparatorWithThreshold extends LocalFileComparator {
+  LocalFileComparatorWithThreshold(super.testFile, this.threshold)
+    : assert(
+        threshold >= 0 && threshold <= 1,
+        'Threshold must be between 0 and 1',
+      );
 
-  final double tolerance;
+  /// Threshold above which tests will be marked as failing.
+  /// Ranges from 0 to 1, both inclusive.
+  final double threshold;
 
+  /// Copy of [LocalFileComparator]'s [compare] method, except for the fact that
+  /// it checks if the [ComparisonResult.diffPercent] is not greater than
+  /// [threshold] to decide whether this test is successful or a failure.
   @override
   Future<bool> compare(Uint8List imageBytes, Uri golden) async {
     final result = await GoldenFileComparator.compareLists(
@@ -54,10 +47,20 @@ class _TolerantGoldenFileComparator extends LocalFileComparator {
       await getGoldenBytes(golden),
     );
 
-    if (result.passed || result.diffPercent <= tolerance) {
+    if (!result.passed && result.diffPercent <= threshold) {
+      log(
+        'A difference of ${result.diffPercent * 100}% was found, but it is '
+        'acceptable since it is not greater than the threshold of '
+        '${threshold * 100}%',
+      );
+
       return true;
     }
 
-    return super.compare(imageBytes, golden);
+    if (!result.passed) {
+      final error = await generateFailureOutput(result, golden, basedir);
+      throw FlutterError(error);
+    }
+    return result.passed;
   }
 }
