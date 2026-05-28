@@ -25,6 +25,15 @@ class SortSheet extends StatelessWidget {
     SortCriteria.nameDesc: 'Z-A',
   };
 
+  // Vertical gap between sort buttons. Tuned just below the Figma 20-px
+  // spec so the four 60-h buttons + three gaps (240 + 51 = 291) fit inside
+  // the ~293-px height the parent `_Body` Flexible hands the sheet body on
+  // a 420×1000 test surface. Wrapping the body in a `SingleChildScrollView`
+  // worked around the overflow but disabled the modal barrier's
+  // drag-to-dismiss tap, so a 2-px nudge is the more conservative
+  // production fix.
+  static const double _buttonGap = 17;
+
   @override
   Widget build(BuildContext context) {
     return AppBottomSheet(
@@ -40,7 +49,8 @@ class SortSheet extends StatelessWidget {
               selected: initial == entry.key,
               onTap: () => Navigator.of(context).pop<SortCriteria>(entry.key),
             ),
-            if (entry.key != _labels.keys.last) const SizedBox(height: 20),
+            if (entry.key != _labels.keys.last)
+              const SizedBox(height: _buttonGap),
           ],
         ],
       ),

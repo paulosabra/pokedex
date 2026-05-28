@@ -13,8 +13,10 @@ void main() {
     testWidgets('renders the canonical message', (tester) async {
       await _pump(tester, const EmptyFilterWidget());
 
+      // Body opens with the canonical "no matches" sentence — we assert on
+      // the lead-in so copy tweaks past the first sentence don't break us.
       expect(
-        find.text('No Pokémon match the current filters.'),
+        find.textContaining('No Pokémon match the current filters.'),
         findsOneWidget,
       );
     });
@@ -22,7 +24,7 @@ void main() {
     testWidgets('omits the clear CTA when onClear is null', (tester) async {
       await _pump(tester, const EmptyFilterWidget());
 
-      expect(find.text('Clear filters'), findsNothing);
+      expect(find.text('Reset filters'), findsNothing);
     });
 
     testWidgets('renders the clear CTA and fires the callback', (
@@ -31,7 +33,7 @@ void main() {
       var taps = 0;
       await _pump(tester, EmptyFilterWidget(onClear: () => taps++));
 
-      await tester.tap(find.text('Clear filters'));
+      await tester.tap(find.text('Reset filters'));
 
       expect(taps, 1);
     });

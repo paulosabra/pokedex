@@ -1,3 +1,4 @@
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,10 +9,14 @@ import 'package:pokedex/app/router/app_router.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/error/result.dart';
+import 'package:pokedex/core/network/connectivity_provider.dart';
+import 'package:pokedex/features/pokemon/data/repositories/pokemon_repository_impl.dart';
+import 'package:pokedex/features/pokemon/domain/entities/index_state.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_page.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
+import 'package:pokedex/features/pokemon/domain/repositories/pokemon_repository.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/find_pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/get_evolution_chain.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/get_pokemon_detail.dart';
@@ -29,6 +34,40 @@ class _MockWatchPokemonList extends Mock implements WatchPokemonList {}
 class _MockGetPokemonDetail extends Mock implements GetPokemonDetail {}
 
 class _MockGetEvolutionChain extends Mock implements GetEvolutionChain {}
+
+class _StubRepository extends Mock implements PokemonRepository {}
+
+class _StubConnectivity extends Mock implements Connectivity {}
+
+/// Catalogue-coverage providers (IndexCoordinator / BackfillCoordinator) ride
+/// off the shared repository + connectivity. The list ViewModel's
+/// `_kickoffCatalogueCoverage` reads `pokemonRepositoryProvider`, which
+/// otherwise mounts the real Drift database and leaks a Timer after the test
+/// disposes.
+({_StubRepository repo, _StubConnectivity connectivity})
+_catalogueCoverageStubs() {
+  final repo = _StubRepository();
+  final connectivity = _StubConnectivity();
+  when(repo.readIndexState).thenAnswer(
+    (_) async => const IndexState(
+      status: IndexStatus.ready,
+      minId: 1,
+      maxId: 1025,
+      totalCount: 1025,
+      generationIds: {1, 2, 3, 4, 5, 6, 7, 8, 9},
+    ),
+  );
+  when(
+    () => repo.listGenerationMembers(any()),
+  ).thenAnswer((_) async => <int>[]);
+  when(
+    connectivity.checkConnectivity,
+  ).thenAnswer((_) async => [ConnectivityResult.none]);
+  when(() => connectivity.onConnectivityChanged).thenAnswer(
+    (_) => const Stream<List<ConnectivityResult>>.empty(),
+  );
+  return (repo: repo, connectivity: connectivity);
+}
 
 GoRouter _routerAt(String location) => GoRouter(
   initialLocation: location,
@@ -82,6 +121,7 @@ void main() {
     tester,
   ) async {
     final mocks = _setupListMocks();
+    final coverage = _catalogueCoverageStubs();
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -89,6 +129,8 @@ void main() {
           getPokemonListProvider.overrideWithValue(mocks.getList),
           findPokemonProvider.overrideWithValue(mocks.findPokemon),
           watchPokemonListProvider.overrideWithValue(mocks.watch),
+          pokemonRepositoryProvider.overrideWithValue(coverage.repo),
+          connectivityProvider.overrideWithValue(coverage.connectivity),
         ],
         child: const PokedexApp(),
       ),
@@ -116,6 +158,8 @@ void main() {
     when(
       () => getChain.call(any()),
     ).thenAnswer((_) async => const Err(NetworkFailure()));
+    final mocks = _setupListMocks();
+    final coverage = _catalogueCoverageStubs();
 
     await tester.pumpWidget(
       ProviderScope(
@@ -123,6 +167,11 @@ void main() {
           routerProvider.overrideWith((ref) => _routerAt('/pokemon/25')),
           getPokemonDetailProvider.overrideWithValue(getDetail),
           getEvolutionChainProvider.overrideWithValue(getChain),
+          getPokemonListProvider.overrideWithValue(mocks.getList),
+          findPokemonProvider.overrideWithValue(mocks.findPokemon),
+          watchPokemonListProvider.overrideWithValue(mocks.watch),
+          pokemonRepositoryProvider.overrideWithValue(coverage.repo),
+          connectivityProvider.overrideWithValue(coverage.connectivity),
         ],
         child: const PokedexApp(),
       ),
