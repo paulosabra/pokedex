@@ -191,13 +191,18 @@ class PokemonListViewModel extends _$PokemonListViewModel {
               items: value,
               offset: value.length,
               hasMore: false,
+              isLoadingMore: false,
               isRefreshing: false,
               refreshError: pageFailure,
             ),
           );
         case Err(:final failure):
           state = AsyncData(
-            next.copyWith(isRefreshing: false, refreshError: failure),
+            next.copyWith(
+              isLoadingMore: false,
+              isRefreshing: false,
+              refreshError: failure,
+            ),
           );
       }
       return;
@@ -210,12 +215,17 @@ class PokemonListViewModel extends _$PokemonListViewModel {
             items: value.items,
             offset: value.items.length,
             hasMore: value.hasMore,
+            isLoadingMore: false,
             isRefreshing: false,
           ),
         );
       case Err(:final failure):
         state = AsyncData(
-          after.copyWith(isRefreshing: false, refreshError: failure),
+          after.copyWith(
+            isLoadingMore: false,
+            isRefreshing: false,
+            refreshError: failure,
+          ),
         );
     }
   }
@@ -304,6 +314,10 @@ class PokemonListViewModel extends _$PokemonListViewModel {
   void _enterBrowse() {
     final current = state.value;
     if (current == null) return;
+    // Discovery left `hasMore: false` (findPokemon is unpaginated). Restore
+    // it before the browse stream's first event so `loadMore` is unblocked
+    // in the race window.
+    state = AsyncData(current.copyWith(hasMore: true));
     _subscribeBrowseStream(sort: current.sort);
   }
 

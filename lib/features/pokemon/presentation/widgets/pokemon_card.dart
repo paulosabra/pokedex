@@ -39,7 +39,7 @@ class PokemonCard extends StatelessWidget {
         name: pokemon.name,
         imageUrl: pokemon.imageUrl,
         compact: compact,
-        onTap: () => context.go('/pokemon/${pokemon.id}'),
+        onTap: () => context.push('/pokemon/${pokemon.id}'),
       );
     }
     final types = pokemon.types;
@@ -50,7 +50,7 @@ class PokemonCard extends StatelessWidget {
       secondaryType: types.length > 1 ? types[1] : null,
       imageUrl: pokemon.imageUrl,
       compact: compact,
-      onTap: () => context.go('/pokemon/${pokemon.id}'),
+      onTap: () => context.push('/pokemon/${pokemon.id}'),
     );
   }
 }

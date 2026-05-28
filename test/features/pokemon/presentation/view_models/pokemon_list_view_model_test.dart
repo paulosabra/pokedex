@@ -417,6 +417,40 @@ void main() {
     });
 
     test(
+      'discovery → browse unblocks loadMore in the pre-stream race window '
+      '(resolved review-100 #2)',
+      () async {
+        await pumpInitial();
+
+        // Flip to discovery — sets hasMore: false (findPokemon is unpaginated).
+        container
+            .read(pokemonListViewModelProvider.notifier)
+            .applyFilter(const PokemonFilter(types: {PokemonTypeId.fire}));
+        await Future<void>.delayed(Duration.zero);
+        expect(valueOrThrow(container).hasMore, isFalse);
+
+        // Flip back to browse — the stream is re-subscribed but has not yet
+        // emitted. Before the fix, hasMore stayed false here and loadMore
+        // was blocked by its `!hasMore` guard.
+        container.read(pokemonListViewModelProvider.notifier).applyFilter(null);
+        await Future<void>.delayed(Duration.zero);
+        expect(valueOrThrow(container).hasMore, isTrue);
+
+        // loadMore should actually issue a page fetch in this window.
+        clearInteractions(getList);
+        when(
+          () => getList.call(limit: 24, offset: any(named: 'offset')),
+        ).thenAnswer(
+          (_) async => Ok(PokemonPage(items: _page(25, 5), hasMore: false)),
+        );
+        await container.read(pokemonListViewModelProvider.notifier).loadMore();
+        verify(
+          () => getList.call(limit: 24, offset: any(named: 'offset')),
+        ).called(1);
+      },
+    );
+
+    test(
       'discovery → AsyncError on findPokemon failure preserves inputs',
       () async {
         await pumpInitial();
@@ -510,6 +544,70 @@ void main() {
           ),
         ]);
         expect(valueOrThrow(container).items.length, 2);
+      },
+    );
+
+    test(
+      'browse refresh resets isLoadingMore when a loadMore is in flight '
+      '(resolved review-100 #1)',
+      () async {
+        await pumpInitial();
+
+        // Hang the page-1 fetch so loadMore stays in flight while refresh runs.
+        final loadMoreCompleter = Completer<Result<PokemonPage>>();
+        when(
+          () => getList.call(limit: 24, offset: 24),
+        ).thenAnswer((_) => loadMoreCompleter.future);
+
+        final vm = container.read(pokemonListViewModelProvider.notifier);
+        unawaited(vm.loadMore());
+        await Future<void>.delayed(Duration.zero);
+        expect(valueOrThrow(container).isLoadingMore, isTrue);
+
+        // Refresh page-0 succeeds and must take ownership of isLoadingMore.
+        when(
+          () => getList.call(limit: 24, offset: 0),
+        ).thenAnswer(
+          (_) async => Ok(PokemonPage(items: _page(1, 5), hasMore: false)),
+        );
+        await vm.refresh();
+
+        expect(valueOrThrow(container).isLoadingMore, isFalse);
+
+        // Drain the hanging loadMore so the test cleans up.
+        loadMoreCompleter.complete(
+          Ok(PokemonPage(items: _page(25, 1), hasMore: false)),
+        );
+        await Future<void>.delayed(Duration.zero);
+      },
+    );
+
+    test(
+      'browse refresh resets isLoadingMore on Err path '
+      '(resolved review-100 #1)',
+      () async {
+        await pumpInitial();
+
+        final loadMoreCompleter = Completer<Result<PokemonPage>>();
+        when(
+          () => getList.call(limit: 24, offset: 24),
+        ).thenAnswer((_) => loadMoreCompleter.future);
+
+        final vm = container.read(pokemonListViewModelProvider.notifier);
+        unawaited(vm.loadMore());
+        await Future<void>.delayed(Duration.zero);
+
+        when(
+          () => getList.call(limit: 24, offset: 0),
+        ).thenAnswer((_) async => const Err(NetworkFailure()));
+        await vm.refresh();
+
+        expect(valueOrThrow(container).isLoadingMore, isFalse);
+
+        loadMoreCompleter.complete(
+          Ok(PokemonPage(items: _page(25, 1), hasMore: false)),
+        );
+        await Future<void>.delayed(Duration.zero);
       },
     );
 

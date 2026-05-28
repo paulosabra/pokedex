@@ -85,6 +85,11 @@ class BackfillCoordinator extends _$BackfillCoordinator {
     }
     if (!await _isOnline()) return;
 
+    // Budget is per-drain, not per-session: a transient outage that left
+    // the prior drain partway through must not pre-bias the next attempt
+    // toward the halt threshold.
+    _consecutiveErrors = 0;
+
     final repo = ref.read(pokemonRepositoryProvider);
     final total = index.totalCount ?? 0;
     if (total == 0) return;

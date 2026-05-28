@@ -402,6 +402,28 @@ void main() {
     );
 
     testWidgets(
+      'short list (maxScrollExtent==0) does not trigger spurious loadMore '
+      '(resolved review-100 #4)',
+      (tester) async {
+        // First page has 3 items with hasMore=true so loadMore would fire
+        // if the scroll guard let it through.
+        final harness = _makeHarness(firstPage: _page(1, 3));
+        await _pumpScreen(tester, harness: harness);
+        await tester.pumpAndSettle();
+
+        // The initial build fetches page-0 exactly once. If _onScroll
+        // misfires on the short list (maxScrollExtent==0), a second call
+        // for offset=24 would be issued.
+        verify(
+          () => harness.getList.call(limit: 24, offset: 0),
+        ).called(1);
+        verifyNever(
+          () => harness.getList.call(limit: 24, offset: 24),
+        );
+      },
+    );
+
+    testWidgets(
       'failed refresh over a populated cache shows the StaleCacheBanner '
       '(TE-02)',
       (tester) async {

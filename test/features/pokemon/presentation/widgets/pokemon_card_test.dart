@@ -99,6 +99,22 @@ void main() {
 
       expect(_lastVisited[router]!(), '/pokemon/1');
     });
+
+    testWidgets(
+      'tap preserves the back-stack (resolved review-100 #5)',
+      (tester) async {
+        final router = await _pump(tester, _bulbasaur);
+
+        await tester.tap(find.byType(core.PokemonCard));
+        await tester.pumpAndSettle();
+
+        // `canPop` is the precise distinction between push (true) and
+        // go (false): push keeps the previous route on the stack so
+        // system-back can return to it.
+        expect(router.canPop(), isTrue);
+        expect(_lastVisited[router]!(), '/pokemon/1');
+      },
+    );
   });
 
   group('PokemonCard adapter — skeleton variant', () {
@@ -132,6 +148,20 @@ void main() {
         await tester.tap(find.text('Garchomp'));
         await tester.pumpAndSettle();
 
+        expect(_lastVisited[router]!(), '/pokemon/445');
+      },
+    );
+
+    testWidgets(
+      'tap on a skeleton preserves the back-stack '
+      '(resolved review-100 #5)',
+      (tester) async {
+        final router = await _pump(tester, _skeleton);
+
+        await tester.tap(find.text('Garchomp'));
+        await tester.pump();
+
+        expect(router.canPop(), isTrue);
         expect(_lastVisited[router]!(), '/pokemon/445');
       },
     );

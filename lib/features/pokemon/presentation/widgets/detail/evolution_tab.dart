@@ -170,7 +170,7 @@ class _StageCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: () => context.go('/pokemon/${stage.id}'),
+      onTap: () => context.push('/pokemon/${stage.id}'),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

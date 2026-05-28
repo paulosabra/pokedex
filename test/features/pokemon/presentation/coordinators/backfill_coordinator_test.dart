@@ -227,6 +227,68 @@ void main() {
       expect(progress.hydrated, 3);
     });
 
+    test(
+      'a new drain after offline does not inherit the prior drain error '
+      'budget (resolved review-100 #3)',
+      () async {
+        seedIndexReady(totalCount: 10);
+
+        // First drain: 4 ServerFailures, then the chunk is exhausted.
+        var firstCall = true;
+        when(
+          () => repository.listMissingSummaryIds(
+            limit: any(named: 'limit'),
+          ),
+        ).thenAnswer((_) async {
+          if (firstCall) {
+            firstCall = false;
+            return [1, 2, 3, 4];
+          }
+          return <int>[];
+        });
+        when(
+          repository.listMissingSummaryIds,
+        ).thenAnswer((_) async => [1, 2, 3, 4]);
+        when(
+          () => repository.hydrateSummary(any()),
+        ).thenAnswer((_) async => const Err(ServerFailure()));
+
+        container.read(backfillCoordinatorProvider);
+        await container.read(backfillCoordinatorProvider.notifier).start();
+        // 4 < 5: budget not exhausted, session not halted.
+        expect(
+          container.read(backfillCoordinatorProvider).isHaltedThisSession,
+          isFalse,
+        );
+
+        // Second drain: only one hydration, and it fails. Without the reset
+        // the leftover 4 + 1 = 5 trips the halt; with the reset, 1 < 5.
+        firstCall = true;
+        when(
+          () => repository.listMissingSummaryIds(
+            limit: any(named: 'limit'),
+          ),
+        ).thenAnswer((_) async {
+          if (firstCall) {
+            firstCall = false;
+            return [5];
+          }
+          return <int>[];
+        });
+        when(repository.listMissingSummaryIds).thenAnswer((_) async => [5]);
+
+        await container.read(backfillCoordinatorProvider.notifier).start();
+
+        expect(
+          container.read(backfillCoordinatorProvider).isHaltedThisSession,
+          isFalse,
+          reason:
+              "The new drain inherited the prior drain's error budget "
+              'instead of starting fresh.',
+        );
+      },
+    );
+
     test('pauses on offline and exits with isRunning false', () async {
       seedIndexReady(totalCount: 3);
       when(repository.listMissingSummaryIds).thenAnswer((_) async => [1, 2, 3]);

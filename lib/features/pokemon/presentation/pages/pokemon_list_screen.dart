@@ -73,7 +73,9 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
   void _onScroll() {
     if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
-    if (pos.pixels >= pos.maxScrollExtent) {
+    // `maxScrollExtent == 0` when the list fits in the viewport — without
+    // the lower bound, `0 >= 0` fires `loadMore` on every layout pass.
+    if (pos.maxScrollExtent > 0 && pos.pixels >= pos.maxScrollExtent) {
       unawaited(
         ref.read(pokemonListViewModelProvider.notifier).loadMore(),
       );

@@ -163,5 +163,43 @@ void main() {
         expect(visited, contains('3'));
       },
     );
+
+    testWidgets(
+      'tapping a stage preserves the back-stack (resolved review-100 #5)',
+      (tester) async {
+        final getChain = _MockGetEvolutionChain();
+        when(
+          () => getChain.call(1),
+        ).thenAnswer((_) async => Ok(bulbasaurEvolutionChain()));
+
+        final router = GoRouter(
+          routes: [
+            GoRoute(
+              path: '/',
+              builder: (_, _) => const Scaffold(
+                body: EvolutionTab(id: 1, accent: _accent),
+              ),
+            ),
+            GoRoute(
+              path: '/pokemon/:id',
+              builder: (_, state) => Scaffold(
+                body: Text('detail:${state.pathParameters['id']}'),
+              ),
+            ),
+          ],
+        );
+
+        await _pump(tester, getChain: getChain, id: 1, router: router);
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Venusaur'));
+        await tester.pump();
+
+        // `canPop` is the precise distinction between push (true) and
+        // go (false): push keeps the previous route on the stack so
+        // system-back returns to the chain view.
+        expect(router.canPop(), isTrue);
+      },
+    );
   });
 }
