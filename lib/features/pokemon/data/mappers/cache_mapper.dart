@@ -10,11 +10,12 @@ import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_detail.dart';
 
 /// Builds a summaries upsert companion from a [Pokemon] entity plus the derived
-/// columns the SQL search/filter needs ([heightDecimetres], [weaknessMask]).
-/// The entity itself is stored as JSON in `payloadJson`.
+/// columns the SQL search/filter needs ([heightDecimetres], [weightHectograms],
+/// [weaknessMask]). The entity itself is stored as JSON in `payloadJson`.
 PokemonSummariesCompanion summaryToCompanion(
   Pokemon pokemon, {
   required int heightDecimetres,
+  required int weightHectograms,
   required int weaknessMask,
   required int nowMs,
 }) => PokemonSummariesCompanion.insert(
@@ -29,6 +30,7 @@ PokemonSummariesCompanion summaryToCompanion(
   secondaryTypeId: Value(
     pokemon.types.length > 1 ? pokemon.types[1].index : null,
   ),
+  weight: Value(weightHectograms),
   weaknessMask: Value(weaknessMask),
 );
 

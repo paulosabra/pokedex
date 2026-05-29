@@ -22,6 +22,7 @@ import 'package:pokedex/features/pokemon/data/mappers/evolution_mapper.dart';
 import 'package:pokedex/features/pokemon/data/mappers/pokemon_detail_mapper.dart';
 import 'package:pokedex/features/pokemon/data/mappers/type_effectiveness.dart';
 import 'package:pokedex/features/pokemon/data/repositories/pokemon_repository_impl.dart';
+import 'package:pokedex/features/pokemon/domain/entities/index_state.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_detail.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
@@ -88,6 +89,42 @@ class _FailingDetailWriteLocal implements PokemonLocalDataSource {
     String? query,
     PokemonFilter? filter,
   }) => _inner.watchSummaries(sort: sort, query: query, filter: filter);
+
+  @override
+  Future<void> upsertIndex(List<PokemonIndexCompanion> rows) =>
+      _inner.upsertIndex(rows);
+
+  @override
+  Future<PokemonIndexBounds?> readIndexBounds() => _inner.readIndexBounds();
+
+  @override
+  Future<List<int>> listGenerationIds() => _inner.listGenerationIds();
+
+  @override
+  Future<List<int>> listGenerationMembers(int generationId) =>
+      _inner.listGenerationMembers(generationId);
+
+  @override
+  Future<void> evictIndexRow(int id) => _inner.evictIndexRow(id);
+
+  @override
+  Future<int?> readIndexSnapshotAt() => _inner.readIndexSnapshotAt();
+
+  @override
+  Future<List<PokemonIndexRow>> queryIndex({
+    required SortCriteria sort,
+    String? query,
+  }) => _inner.queryIndex(sort: sort, query: query);
+
+  @override
+  Stream<List<PokemonIndexRow>> watchIndex({
+    required SortCriteria sort,
+    String? query,
+  }) => _inner.watchIndex(sort: sort, query: query);
+
+  @override
+  Future<List<int>> listMissingSummaryIds({int? limit}) =>
+      _inner.listMissingSummaryIds(limit: limit);
 }
 
 void main() {
@@ -495,12 +532,14 @@ void main() {
         summaryToCompanion(
           bulbasaur,
           heightDecimetres: 7,
+          weightHectograms: 69,
           weaknessMask: 0,
           nowMs: nowMs(),
         ),
         summaryToCompanion(
           charmander,
           heightDecimetres: 7,
+          weightHectograms: 85,
           weaknessMask: 0,
           nowMs: nowMs(),
         ),
@@ -588,6 +627,271 @@ void main() {
             .first;
 
         expect(first.map((p) => p.id), [1, 4]);
+      },
+    );
+  });
+
+  PokemonIndexCompanion indexRow({
+    required int id,
+    required String name,
+    int? generationId,
+    int? indexedAt,
+  }) => PokemonIndexCompanion.insert(
+    id: Value(id),
+    name: name,
+    nameNormalized: name,
+    generationId: generationId ?? 1,
+    indexedAt: indexedAt ?? nowMs(),
+  );
+
+  group('PokemonIndex methods', () {
+    test('readIndexState returns idle when empty', () async {
+      final state = await repo.readIndexState();
+      expect(state.status, IndexStatus.idle);
+      expect(state.minId, isNull);
+      expect(state.totalCount, isNull);
+    });
+
+    test(
+      'readIndexState returns ready when within kPokemonIndexTtl',
+      () async {
+        await dao.upsertIndex([
+          indexRow(id: 1, name: 'bulbasaur', generationId: 1),
+          indexRow(id: 906, name: 'sprigatito', generationId: 9),
+        ]);
+
+        final state = await repo.readIndexState();
+
+        expect(state.status, IndexStatus.ready);
+        expect(state.minId, 1);
+        expect(state.maxId, 906);
+        expect(state.totalCount, 2);
+        expect(state.generationIds, {1, 9});
+      },
+    );
+
+    test('readIndexState returns stale past kPokemonIndexTtl', () async {
+      await dao.upsertIndex([
+        indexRow(id: 1, name: 'bulbasaur', indexedAt: daysAgo(31)),
+      ]);
+
+      expect((await repo.readIndexState()).status, IndexStatus.stale);
+    });
+
+    test('refreshIndex offline returns NetworkFailure', () async {
+      goOffline();
+      final result = await repo.refreshIndex();
+      expect((result as Err<IndexState>).failure, isA<NetworkFailure>());
+    });
+
+    test(
+      'refreshIndex online persists the response and returns ready',
+      () async {
+        when(
+          () => remote.fetchIndex(limit: any(named: 'limit')),
+        ).thenAnswer(
+          (_) async => const PokemonListResponseDto(
+            count: 2,
+            results: [
+              NamedApiResourceDto(
+                url: 'https://pokeapi.co/api/v2/pokemon/1/',
+                name: 'bulbasaur',
+              ),
+              NamedApiResourceDto(
+                url: 'https://pokeapi.co/api/v2/pokemon/906/',
+                name: 'sprigatito',
+              ),
+            ],
+          ),
+        );
+
+        final result = await repo.refreshIndex();
+
+        final state = (result as Ok<IndexState>).value;
+        expect(state.status, IndexStatus.ready);
+        expect(state.minId, 1);
+        expect(state.maxId, 906);
+        expect(state.generationIds, {1, 9});
+      },
+    );
+
+    test('refreshIndex surfaces a remote failure', () async {
+      when(
+        () => remote.fetchIndex(limit: any(named: 'limit')),
+      ).thenThrow(const ServerFailure());
+
+      final result = await repo.refreshIndex();
+
+      expect((result as Err<IndexState>).failure, isA<ServerFailure>());
+    });
+
+    test('listGenerationMembers returns ids ordered ascending', () async {
+      await dao.upsertIndex([
+        indexRow(id: 1, name: 'a', generationId: 1),
+        indexRow(id: 4, name: 'b', generationId: 1),
+        indexRow(id: 152, name: 'c', generationId: 2),
+      ]);
+
+      expect(await repo.listGenerationMembers(1), [1, 4]);
+      expect(await repo.listGenerationMembers(2), [152]);
+      expect(await repo.listGenerationMembers(9), isEmpty);
+    });
+
+    test(
+      'listMissingSummaryIds returns indexed-but-not-hydrated ids',
+      () async {
+        await dao.upsertIndex([
+          indexRow(id: 1, name: 'bulbasaur'),
+          indexRow(id: 2, name: 'ivysaur'),
+        ]);
+        await dao.upsertSummaries([
+          summaryToCompanion(
+            composedDetail().summary,
+            heightDecimetres: 7,
+            weightHectograms: 69,
+            weaknessMask: 0,
+            nowMs: nowMs(),
+          ),
+        ]);
+
+        expect(await repo.listMissingSummaryIds(), [2]);
+      },
+    );
+
+    test('evictIndexEntry removes the index row', () async {
+      await dao.upsertIndex([indexRow(id: 1, name: 'bulbasaur')]);
+
+      await repo.evictIndexEntry(1);
+
+      expect(await dao.readIndexBounds(), isNull);
+    });
+  });
+
+  group('findPokemon (index-aware)', () {
+    final bulbasaurDetail = pokemonDetailFromDtos(
+      pokemon: pokemonDto,
+      species: speciesDto,
+      effectiveness: computeTypeEffectiveness(const [], const {}),
+      encounters: const [],
+    );
+
+    Future<void> seedIndex(List<({int id, String name})> rows) async {
+      await dao.upsertIndex([
+        for (final row in rows)
+          PokemonIndexCompanion.insert(
+            id: Value(row.id),
+            name: row.name,
+            nameNormalized: row.name,
+            generationId: 1,
+            indexedAt: nowMs(),
+          ),
+      ]);
+    }
+
+    Future<void> seedSummary(int id) async {
+      await dao.upsertSummaries([
+        summaryToCompanion(
+          bulbasaurDetail.summary.copyWith(id: id, name: 'p$id'),
+          heightDecimetres: 7,
+          weightHectograms: 69,
+          weaknessMask: 0,
+          nowMs: nowMs(),
+        ),
+      ]);
+    }
+
+    test('returns hydrated entities when a summary exists', () async {
+      await seedIndex([(id: 1, name: 'bulbasaur')]);
+      await seedSummary(1);
+
+      final result = await repo.findPokemon(sort: SortCriteria.numberAsc);
+
+      final list = (result as Ok<List<Pokemon>>).value;
+      expect(list, hasLength(1));
+      expect(list.single.types, isNotEmpty);
+    });
+
+    test(
+      'returns skeletons (empty types) for index rows without a summary',
+      () async {
+        await seedIndex([(id: 445, name: 'garchomp')]);
+
+        final result = await repo.findPokemon(
+          sort: SortCriteria.numberAsc,
+          query: 'garchomp',
+        );
+
+        final list = (result as Ok<List<Pokemon>>).value;
+        expect(list, hasLength(1));
+        expect(list.single.id, 445);
+        expect(list.single.types, isEmpty);
+        expect(list.single.imageUrl, contains('/445.png'));
+      },
+    );
+
+    test('applies generationId filter against the index', () async {
+      await seedIndex([
+        (id: 1, name: 'bulbasaur'),
+        (id: 152, name: 'chikorita'),
+      ]);
+      // Index uses generationId = 1 in this helper; assert filtering on
+      // generation 1 keeps bulbasaur and chikorita; generation 5 returns none.
+      final gen1 = await repo.findPokemon(
+        sort: SortCriteria.numberAsc,
+        filter: const PokemonFilter(generationId: 1),
+      );
+      expect((gen1 as Ok<List<Pokemon>>).value.map((p) => p.id), [1, 152]);
+
+      final gen5 = await repo.findPokemon(
+        sort: SortCriteria.numberAsc,
+        filter: const PokemonFilter(generationId: 5),
+      );
+      expect((gen5 as Ok<List<Pokemon>>).value, isEmpty);
+    });
+
+    test('applies numberRange filter against the index', () async {
+      await seedIndex([
+        (id: 1, name: 'a'),
+        (id: 100, name: 'b'),
+        (id: 200, name: 'c'),
+      ]);
+
+      final result = await repo.findPokemon(
+        sort: SortCriteria.numberAsc,
+        filter: const PokemonFilter(numberRange: (min: 50, max: 150)),
+      );
+
+      expect(
+        (result as Ok<List<Pokemon>>).value.map((p) => p.id),
+        [100],
+      );
+    });
+
+    test(
+      'falls back to summaries when filter has type/weakness/height/weight',
+      () async {
+        // Index does not store types — when a type filter is active we must
+        // intersect the existing PokemonSummaries query, never the index.
+        await seedSummary(1);
+
+        final result = await repo.findPokemon(
+          sort: SortCriteria.numberAsc,
+          filter: const PokemonFilter(types: {PokemonTypeId.grass}),
+        );
+
+        expect((result as Ok<List<Pokemon>>).value, hasLength(1));
+      },
+    );
+
+    test(
+      'falls back to summaries when the index is empty (pre-load)',
+      () async {
+        await seedSummary(1);
+        // No index rows seeded; findPokemon should still return the hydrated
+        // summary so a user pre-index search isn't empty by definition.
+        final result = await repo.findPokemon(sort: SortCriteria.numberAsc);
+
+        expect((result as Ok<List<Pokemon>>).value, hasLength(1));
       },
     );
   });

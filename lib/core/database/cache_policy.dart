@@ -7,3 +7,10 @@ const kPokemonCacheTtl = Duration(days: 7);
 /// change, so they use a long TTL and must NOT expire on the 7-day Pokémon
 /// clock.
 const kStaticDataTtl = Duration(days: 365);
+
+/// Time-to-live for the lightweight National-Dex index (id + name +
+/// nameNormalized + generationId) that powers Search / Sort / Filters /
+/// Generations across the entire catalogue. PokéAPI adds at most one
+/// generation per year, so a 30-day rebuild is "soon enough" without
+/// re-paying ~200 KB of JSON on every cold start.
+const kPokemonIndexTtl = Duration(days: 30);

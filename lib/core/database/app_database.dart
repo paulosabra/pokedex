@@ -29,6 +29,9 @@ class PokemonSummaries extends Table {
   /// Raw PokéAPI height in decimetres.
   IntColumn get height => integer()();
 
+  /// Raw PokéAPI weight in hectograms.
+  IntColumn get weight => integer().withDefault(const Constant(0))();
+
   /// 18-bit weakness bitmask (bit i = `PokemonTypeId.values[i]`, RF-15).
   /// Populated by the repository in PR3; defaults to 0 until then.
   IntColumn get weaknessMask => integer().withDefault(const Constant(0))();
@@ -91,9 +94,51 @@ class TypeRelations extends Table {
   Set<Column<Object>> get primaryKey => {typeId};
 }
 
+/// Lightweight National-Dex index covering the entire catalogue, populated
+/// from a single `GET /pokemon?limit=100000` call. Carries the bare minimum
+/// to power Search / Sort / Filters / Generations across every Pokémon —
+/// detail/summary hydration happens lazily into [PokemonSummaries] /
+/// [PokemonDetails] (the index is a *superset* of those tables).
+///
+/// A separate table (not an `is_index_only` flag on [PokemonSummaries])
+/// because the index has its own 30-day TTL (`kPokemonIndexTtl`) distinct
+/// from the 7-day per-Pokémon TTL, and because filter SQL on
+/// [PokemonSummaries] continues to operate on non-null type/weight columns
+/// without a guard.
+@DataClassName('PokemonIndexRow')
+class PokemonIndex extends Table {
+  /// National Dex id (primary key; not auto-incremented).
+  IntColumn get id => integer()();
+
+  /// Display name (raw PokéAPI value, lowercase).
+  TextColumn get name => text()();
+
+  /// Lowercased, diacritics-stripped [name] for accent/case-insensitive
+  /// search (RN-07).
+  TextColumn get nameNormalized => text()();
+
+  /// National Dex generation 1–9, or `kUnknownGenerationId` (0) when the id
+  /// falls outside the released ranges (e.g. alternate forms ≥ 10000).
+  IntColumn get generationId => integer()();
+
+  /// Snapshot epoch milliseconds — every row in a single `/pokemon` fetch
+  /// shares the same value, so TTL is a column-level clock without needing
+  /// `MAX(indexed_at)`.
+  IntColumn get indexedAt => integer()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
 /// The on-device SQLite cache backing the cache-first repository (RN-02).
 @DriftDatabase(
-  tables: [PokemonSummaries, PokemonDetails, EvolutionChains, TypeRelations],
+  tables: [
+    PokemonSummaries,
+    PokemonDetails,
+    EvolutionChains,
+    TypeRelations,
+    PokemonIndex,
+  ],
 )
 class AppDatabase extends _$AppDatabase {
   /// Opens the on-device database — a native file on mobile/desktop, or a
@@ -105,11 +150,24 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 3;
 
   @override
-  MigrationStrategy get migration =>
-      MigrationStrategy(onCreate: (m) => m.createAll());
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (m) => m.createAll(),
+    onUpgrade: (m, from, to) async {
+      // v2 — Figma's Filters dialog adds a weight category, so the cache needs
+      // the raw hectogram value next to height.
+      if (from < 2) {
+        await m.addColumn(pokemonSummaries, pokemonSummaries.weight);
+      }
+      // v3 — full-database coverage adds the lightweight PokemonIndex table.
+      // Additive: no row rewrites, no risk to existing summaries/details.
+      if (from < 3) {
+        await m.createTable(pokemonIndex);
+      }
+    },
+  );
 }
 
 QueryExecutor _openConnection() => driftDatabase(

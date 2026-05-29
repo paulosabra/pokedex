@@ -30,6 +30,13 @@ abstract class PokeApiService {
     @Query('offset') int offset,
   );
 
+  /// `GET /pokemon?limit={limit}` — the full National-Dex index in one call.
+  /// The brainstorm budgeted ~200 KB at `limit=100000` (PokéAPI returns
+  /// `count` + `results[]` without forcing a per-id round-trip), powering
+  /// Search / Sort / Filters / Generations across the entire catalogue.
+  @GET('/pokemon')
+  Future<PokemonListResponseDto> getPokemonIndex(@Query('limit') int limit);
+
   /// `GET /pokemon/{id}` — a single Pokémon's core data.
   @GET('/pokemon/{id}')
   Future<PokemonDto> getPokemon(@Path('id') int id);

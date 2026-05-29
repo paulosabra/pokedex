@@ -1,6 +1,6 @@
 name: pokedex
 description: "Offline-first, multiplatform Pokédex — browse, search, and explore Pokémon from the PokéAPI."
-publish_to: 'none'
+publish_to: "none"
 
 version: 1.0.0+1
 
@@ -8,6 +8,7 @@ environment:
   sdk: ^3.12.0
 
 dependencies:
+  cached_network_image: ^3.4.1
   connectivity_plus: ^7.1.1
   dio: ^5.9.0
   # drift + drift_dev are pinned exact to the analyzer-9 stable codegen line.
@@ -19,12 +20,14 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_riverpod: ^3.0.0
+  flutter_svg: ^2.3.0
   freezed_annotation: ^3.0.0
   go_router: ^17.2.3
   json_annotation: ^4.11.0
   meta: ^1.16.0
   retrofit: ^4.9.2
   riverpod_annotation: ^4.0.0
+  shimmer: ^3.0.0
   sqlite3_flutter_libs: ^0.5.24
 
 dev_dependencies:
@@ -50,6 +53,13 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/icons/types/
+    - assets/icons/header/
+    - assets/icons/heights/
+    - assets/icons/weights/
+    - assets/illustrations/
 
   fonts:
     - family: SF Pro Display

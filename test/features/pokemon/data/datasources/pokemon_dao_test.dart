@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pokedex/core/database/app_database.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
 import 'package:pokedex/features/pokemon/data/datasources/pokemon_dao.dart';
+import 'package:pokedex/features/pokemon/data/mappers/generation_ranges.dart';
 import 'package:pokedex/features/pokemon/data/summary_encoding.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
@@ -32,6 +33,7 @@ void main() {
     PokemonTypeId? secondary,
     int generationId = 1,
     int height = 7,
+    int weight = 0,
     int weaknessMask = 0,
   }) => PokemonSummariesCompanion.insert(
     id: Value(id),
@@ -43,6 +45,7 @@ void main() {
     payloadJson: '{}',
     updatedAt: 0,
     secondaryTypeId: Value(secondary?.index),
+    weight: Value(weight),
     weaknessMask: Value(weaknessMask),
   );
 
@@ -297,6 +300,32 @@ void main() {
       );
     });
 
+    test('by generationId returns only Pokémon from that generation', () async {
+      // The setUp inserts gen-1 rows by default; only chikorita is gen 2.
+      expect(
+        await ids(filter: const PokemonFilter(generationId: 1)),
+        [1, 4, 31, 143],
+      );
+      // Chikorita is the only generationId 2 row.
+      expect(await ids(filter: const PokemonFilter(generationId: 2)), [152]);
+      // A generation with no rows yields an empty result, not an error.
+      expect(await ids(filter: const PokemonFilter(generationId: 5)), isEmpty);
+    });
+
+    test('generationId intersects with types + height', () async {
+      // grass type AND gen 1 AND short → bulbasaur only (chikorita is gen 2).
+      expect(
+        await ids(
+          filter: const PokemonFilter(
+            types: {PokemonTypeId.grass},
+            height: HeightCategory.short,
+            generationId: 1,
+          ),
+        ),
+        [1],
+      );
+    });
+
     test('a zero-result intersection returns empty, not an error', () async {
       // fire type AND tall height → none (charmander is fire but short).
       expect(
@@ -342,6 +371,85 @@ void main() {
     });
   });
 
+  group('by weight bucket', () {
+    setUp(() async {
+      await dao.upsertSummaries([
+        // pikachu @ 60 hg (light), pidgeot @ 395 hg (normal), snorlax @ 4600 hg
+        // (heavy).
+        summary(
+          id: 25,
+          name: 'pikachu',
+          primary: PokemonTypeId.electric,
+          weight: 60,
+        ),
+        summary(
+          id: 18,
+          name: 'pidgeot',
+          primary: PokemonTypeId.normal,
+          weight: 395,
+        ),
+        summary(
+          id: 143,
+          name: 'snorlax',
+          primary: PokemonTypeId.normal,
+          weight: 4600,
+        ),
+      ]);
+    });
+
+    test('WeightCategory.light returns only sub-100hg rows', () async {
+      expect(
+        await ids(filter: const PokemonFilter(weight: WeightCategory.light)),
+        [25],
+      );
+    });
+
+    test('WeightCategory.normal returns 100..499hg rows', () async {
+      expect(
+        await ids(filter: const PokemonFilter(weight: WeightCategory.normal)),
+        [18],
+      );
+    });
+
+    test('WeightCategory.heavy returns >=500hg rows', () async {
+      expect(
+        await ids(filter: const PokemonFilter(weight: WeightCategory.heavy)),
+        [143],
+      );
+    });
+  });
+
+  group('weight bucket boundaries', () {
+    // id == weight so the boundary values are easy to read in expectations.
+    setUp(() async {
+      await dao.upsertSummaries([
+        for (final w in [99, 100, 499, 500])
+          summary(id: w, name: 'w$w', primary: PokemonTypeId.normal, weight: w),
+      ]);
+    });
+
+    test('light is weight < 100 (100 is excluded)', () async {
+      expect(
+        await ids(filter: const PokemonFilter(weight: WeightCategory.light)),
+        [99],
+      );
+    });
+
+    test('normal is 100..499 inclusive', () async {
+      expect(
+        await ids(filter: const PokemonFilter(weight: WeightCategory.normal)),
+        [100, 499],
+      );
+    });
+
+    test('heavy is weight >= 500 (500 is included)', () async {
+      expect(
+        await ids(filter: const PokemonFilter(weight: WeightCategory.heavy)),
+        [500],
+      );
+    });
+  });
+
   group('sort', () {
     setUp(() async {
       await dao.upsertSummaries([
@@ -376,6 +484,214 @@ void main() {
       await dao.upsertSummaries([
         summary(id: 1, name: 'bulbasaur', primary: PokemonTypeId.grass),
       ]);
+      await pumpEventQueue();
+      await sub.cancel();
+
+      expect(emissions, [
+        <int>[],
+        [1],
+      ]);
+    });
+  });
+
+  PokemonIndexCompanion indexRow({
+    required int id,
+    required String name,
+    int? generationId,
+    int indexedAt = 0,
+  }) => PokemonIndexCompanion.insert(
+    id: Value(id),
+    name: name,
+    nameNormalized: normalizeName(name),
+    generationId: generationId ?? generationForId(id),
+    indexedAt: indexedAt,
+  );
+
+  group('PokemonIndex', () {
+    test('upsertIndex / readIndexBounds round-trip', () async {
+      await dao.upsertIndex([
+        indexRow(id: 1, name: 'bulbasaur'),
+        indexRow(id: 445, name: 'garchomp'),
+        indexRow(id: 1025, name: 'pecharunt'),
+      ]);
+
+      final bounds = await dao.readIndexBounds();
+
+      expect(bounds, isNotNull);
+      expect(bounds!.minId, 1);
+      expect(bounds.maxId, 1025);
+      expect(bounds.totalCount, 3);
+    });
+
+    test('readIndexBounds returns null when empty', () async {
+      expect(await dao.readIndexBounds(), isNull);
+    });
+
+    test(
+      'upsertIndex chunks larger batches across multiple transactions',
+      () async {
+        // The DAO's internal batch size is 200; 450 rows exercises the chunking
+        // loop without making the test slow.
+        final rows = [
+          for (var i = 1; i <= 450; i++) indexRow(id: i, name: 'p$i'),
+        ];
+
+        await dao.upsertIndex(rows);
+
+        final bounds = await dao.readIndexBounds();
+        expect(bounds!.totalCount, 450);
+      },
+    );
+
+    test('upsertIndex overwrites existing rows on id conflict', () async {
+      await dao.upsertIndex([indexRow(id: 1, name: 'bulbasaur')]);
+      await dao.upsertIndex([indexRow(id: 1, name: 'venusaur')]);
+
+      final rows = await dao.queryIndex(sort: SortCriteria.numberAsc);
+      expect(rows, hasLength(1));
+      expect(rows.first.name, 'venusaur');
+    });
+
+    test(
+      'listGenerationIds returns distinct ids ascending, drops unknown',
+      () async {
+        await dao.upsertIndex([
+          indexRow(id: 1, name: 'a', generationId: 1),
+          indexRow(id: 152, name: 'b', generationId: 2),
+          indexRow(id: 152, name: 'b', generationId: 2),
+          indexRow(id: 906, name: 'c', generationId: 9),
+          // generationId 0 (unknown) — should be filtered out.
+          indexRow(id: 10001, name: 'mega', generationId: 0),
+        ]);
+
+        expect(await dao.listGenerationIds(), [1, 2, 9]);
+      },
+    );
+
+    test('listGenerationMembers returns ids of the given generation', () async {
+      await dao.upsertIndex([
+        indexRow(id: 1, name: 'bulbasaur'),
+        indexRow(id: 4, name: 'charmander'),
+        indexRow(id: 7, name: 'squirtle'),
+        indexRow(id: 152, name: 'chikorita'),
+      ]);
+
+      expect(await dao.listGenerationMembers(1), [1, 4, 7]);
+      expect(await dao.listGenerationMembers(2), [152]);
+      expect(await dao.listGenerationMembers(5), isEmpty);
+    });
+
+    test('evictIndexRow drops the row by id', () async {
+      await dao.upsertIndex([
+        indexRow(id: 1, name: 'a'),
+        indexRow(id: 2, name: 'b'),
+      ]);
+
+      await dao.evictIndexRow(1);
+
+      final rows = await dao.queryIndex(sort: SortCriteria.numberAsc);
+      expect(rows.map((r) => r.id), [2]);
+    });
+
+    test('readIndexSnapshotAt returns the MAX(indexed_at) clock', () async {
+      await dao.upsertIndex([
+        indexRow(id: 1, name: 'a', indexedAt: 100),
+        indexRow(id: 2, name: 'b', indexedAt: 100),
+      ]);
+      expect(await dao.readIndexSnapshotAt(), 100);
+
+      // A second upsert with a newer snapshot bumps MAX even if some rows
+      // still carry the older clock (recovery from a partial upsert).
+      await dao.upsertIndex([indexRow(id: 3, name: 'c', indexedAt: 200)]);
+      expect(await dao.readIndexSnapshotAt(), 200);
+    });
+
+    test('readIndexSnapshotAt returns null on an empty index', () async {
+      expect(await dao.readIndexSnapshotAt(), isNull);
+    });
+
+    group('queryIndex search', () {
+      setUp(() async {
+        await dao.upsertIndex([
+          indexRow(id: 1, name: 'bulbasaur'),
+          indexRow(id: 2, name: 'ivysaur'),
+          indexRow(id: 445, name: 'garchomp'),
+          indexRow(id: 669, name: 'flabébé'),
+        ]);
+      });
+
+      test('by name substring, case- and accent-insensitive (RN-07)', () async {
+        final saur = await dao.queryIndex(
+          sort: SortCriteria.numberAsc,
+          query: 'SAUR',
+        );
+        expect(saur.map((r) => r.id), [1, 2]);
+
+        final flabe = await dao.queryIndex(
+          sort: SortCriteria.numberAsc,
+          query: 'flabe',
+        );
+        expect(flabe.map((r) => r.id), [669]);
+      });
+
+      test('by numeric id with leading-zero tolerance (RN-06)', () async {
+        for (final term in const ['445', '0445', '00445']) {
+          final rows = await dao.queryIndex(
+            sort: SortCriteria.numberAsc,
+            query: term,
+          );
+          expect(rows.map((r) => r.id), [445]);
+        }
+      });
+
+      test('empty query returns the full index in sort order', () async {
+        expect(
+          (await dao.queryIndex(
+            sort: SortCriteria.numberDesc,
+          )).map((r) => r.id),
+          [669, 445, 2, 1],
+        );
+      });
+    });
+
+    group('listMissingSummaryIds', () {
+      test('returns ids in the index but not in summaries', () async {
+        await dao.upsertIndex([
+          indexRow(id: 1, name: 'bulbasaur'),
+          indexRow(id: 2, name: 'ivysaur'),
+          indexRow(id: 3, name: 'venusaur'),
+        ]);
+        await dao.upsertSummaries([
+          summary(id: 1, name: 'bulbasaur', primary: PokemonTypeId.grass),
+        ]);
+
+        expect(await dao.listMissingSummaryIds(), [2, 3]);
+      });
+
+      test('respects limit', () async {
+        await dao.upsertIndex([
+          for (var i = 1; i <= 10; i++) indexRow(id: i, name: 'p$i'),
+        ]);
+        expect(await dao.listMissingSummaryIds(limit: 3), [1, 2, 3]);
+      });
+
+      test('returns empty when every index row has a summary', () async {
+        await dao.upsertIndex([indexRow(id: 1, name: 'a')]);
+        await dao.upsertSummaries([
+          summary(id: 1, name: 'a', primary: PokemonTypeId.grass),
+        ]);
+        expect(await dao.listMissingSummaryIds(), isEmpty);
+      });
+    });
+
+    test('watchIndex re-emits when an index row is upserted', () async {
+      final emissions = <List<int>>[];
+      final sub = dao
+          .watchIndex(sort: SortCriteria.numberAsc)
+          .listen((rows) => emissions.add(rows.map((r) => r.id).toList()));
+
+      await pumpEventQueue();
+      await dao.upsertIndex([indexRow(id: 1, name: 'bulbasaur')]);
       await pumpEventQueue();
       await sub.cancel();
 

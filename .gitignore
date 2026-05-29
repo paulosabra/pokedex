@@ -50,3 +50,9 @@ app.*.map.json
 *.drift.dart
 *.mocks.dart
 *.config.dart
+
+# IDE-generated devtools workspace state
+devtools_options.yaml
+
+# Claude Code workspace state
+.claude/

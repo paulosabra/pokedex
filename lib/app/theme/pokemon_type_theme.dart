@@ -35,23 +35,30 @@ abstract final class PokemonTypeTheme {
     PokemonTypeId.steel: Color(0xFF417D9A),
   };
 
-  /// Exact card-background tints from §10.3. Only Grass and Fire are specified;
-  /// the other 16 are derived in [styleOf].
-  static const Map<PokemonTypeId, Color> _exactBackgrounds = {
-    PokemonTypeId.grass: Color(0xFF8BBE8A),
+  /// Card-background tint per type — Figma `Background Type / *` variables on
+  /// the Style Guide. All 18 are explicit (no derivation).
+  static const Map<PokemonTypeId, Color> _backgrounds = {
+    PokemonTypeId.bug: Color(0xFF8BD674),
+    PokemonTypeId.dark: Color(0xFF6F6E78),
+    PokemonTypeId.dragon: Color(0xFF7383B9),
+    PokemonTypeId.electric: Color(0xFFF2CB55),
+    PokemonTypeId.fairy: Color(0xFFEBA8C3),
+    PokemonTypeId.fighting: Color(0xFFEB4971),
     PokemonTypeId.fire: Color(0xFFFFA756),
+    PokemonTypeId.flying: Color(0xFF83A2E3),
+    PokemonTypeId.ghost: Color(0xFF8571BE),
+    PokemonTypeId.grass: Color(0xFF8BBE8A),
+    PokemonTypeId.ground: Color(0xFFF78551),
+    PokemonTypeId.ice: Color(0xFF91D8DF),
+    PokemonTypeId.normal: Color(0xFFB5B9C4),
+    PokemonTypeId.poison: Color(0xFF9F6E97),
+    PokemonTypeId.psychic: Color(0xFFFF6568),
+    PokemonTypeId.rock: Color(0xFFD4C294),
+    PokemonTypeId.steel: Color(0xFF4C91B2),
+    PokemonTypeId.water: Color(0xFF58ABF6),
   };
 
   /// The [PokemonTypeStyle] for [type].
-  ///
-  /// For the 16 types without an exact §10.3 background, a provisional tint is
-  /// derived (50% toward white); these are reconciled against the Figma
-  /// "Background Type" variables in T-18.
-  static PokemonTypeStyle styleOf(PokemonTypeId type) {
-    final color = _colors[type]!;
-    final backgroundColor =
-        _exactBackgrounds[type] ??
-        Color.lerp(color, const Color(0xFFFFFFFF), 0.5)!;
-    return (color: color, backgroundColor: backgroundColor);
-  }
+  static PokemonTypeStyle styleOf(PokemonTypeId type) =>
+      (color: _colors[type]!, backgroundColor: _backgrounds[type]!);
 }

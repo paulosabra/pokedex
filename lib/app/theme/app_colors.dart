@@ -13,13 +13,26 @@ abstract final class AppColors {
   /// Text rendered on top of a type color.
   static const Color textWhite = Color(0xFFFFFFFF);
 
+  /// Pokémon number caption — [textBlack] at 60% opacity (Figma Style Guide
+  /// `$text-number`, frame `326:64`).
+  static const Color textNumber = Color(0x9917171B);
+
   /// Search-field / input background.
   static const Color backgroundInput = Color(0xFFF2F2F2);
+
+  /// Pressed / focused input background — Figma Style Guide
+  /// `Background / Pressed Input` (`Text Field / Focused`, frame `329:1441`).
+  static const Color backgroundPressedInput = Color(0xFFE2E2E2);
 
   /// Screen and sheet background.
   static const Color backgroundWhite = Color(0xFFFFFFFF);
 
-  /// Modal scrim over sheets. §10.1 specifies black with an unspecified
-  /// opacity; this uses the Material barrier default (54%).
-  static const Color backgroundModal = Color(0x8A000000);
+  /// Modal scrim over sheets — black at 25% opacity (Figma Style Guide
+  /// `$background-modal`, frame `326:64`).
+  static const Color backgroundModal = Color(0x40000000);
+
+  /// Selected / primary-action accent. Figma's "Type / Psychic" tone reused
+  /// as the selected-button fill on the Sort and Generations sheets
+  /// (frames `268:244` and `105:739`).
+  static const Color actionPrimary = Color(0xFFEA5D60);
 }
