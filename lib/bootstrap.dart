@@ -107,17 +107,30 @@ void _runApp(
 }
 // coverage:ignore-end
 
-/// Runs [body] in an error-guarded zone whose uncaught-error handler routes to
-/// the current reporter from [reporter] (read lazily so a later Sentry handover
-/// is honored). Surfacing as a named function keeps the zone wiring testable.
+/// Runs [body] in an error-guarded zone, routing both boot and runtime failures
+/// to the current reporter from [reporter] (read lazily so a Sentry handover is
+/// honored). Surfacing as a named function keeps the zone wiring testable.
+///
+/// Two channels, because a guarded zone does NOT capture errors you `await`:
+/// - the explicit `try`/`catch` reports synchronous boot/init failures (the
+///   `await body()` path) that would otherwise rethrow out of `main` (C-2);
+/// - the zone's `onError` reports runtime uncaught errors raised after `body`
+///   hands control to the app (unawaited futures, timers, callbacks).
 @visibleForTesting
 Future<void> runGuarded(
   Future<void> Function() body,
   ErrorReporter Function() reporter,
 ) async {
-  await runZonedGuarded(body, (error, stack) {
-    reporter().captureError(error, stack);
-  });
+  await runZonedGuarded(
+    () async {
+      try {
+        await body();
+      } on Object catch (error, stackTrace) {
+        reporter().captureError(error, stackTrace);
+      }
+    },
+    (error, stack) => reporter().captureError(error, stack),
+  );
 }
 
 /// Installs global crash hooks routing framework + platform errors to
