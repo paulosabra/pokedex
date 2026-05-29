@@ -7,6 +7,7 @@ import 'package:mocktail/mocktail.dart';
 import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/error/result.dart';
 import 'package:pokedex/core/network/connectivity_provider.dart';
+import 'package:pokedex/core/observability/observability_providers.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
 import 'package:pokedex/features/pokemon/data/repositories/pokemon_repository_impl.dart';
 import 'package:pokedex/features/pokemon/domain/entities/index_state.dart';
@@ -20,6 +21,8 @@ import 'package:pokedex/features/pokemon/domain/usecases/get_pokemon_list.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/watch_pokemon_list.dart';
 import 'package:pokedex/features/pokemon/presentation/state/pokemon_list_state.dart';
 import 'package:pokedex/features/pokemon/presentation/view_models/pokemon_list_view_model.dart';
+
+import '../../../../helpers/recording_observability.dart';
 
 class _MockGetPokemonList extends Mock implements GetPokemonList {}
 
@@ -59,6 +62,8 @@ void main() {
   late _MockRepository repository;
   late _MockConnectivity connectivity;
   late StreamController<List<Pokemon>> cacheController;
+  late RecordingAnalytics analytics;
+  late RecordingErrorReporter reporter;
   late ProviderContainer container;
 
   PokemonListState valueOrThrow(ProviderContainer c) {
@@ -79,6 +84,8 @@ void main() {
     repository = _MockRepository();
     connectivity = _MockConnectivity();
     cacheController = StreamController<List<Pokemon>>.broadcast();
+    analytics = RecordingAnalytics();
+    reporter = RecordingErrorReporter();
 
     when(
       () => getList.call(
@@ -123,6 +130,8 @@ void main() {
         watchPokemonListProvider.overrideWithValue(watchList),
         pokemonRepositoryProvider.overrideWithValue(repository),
         connectivityProvider.overrideWithValue(connectivity),
+        analyticsServiceProvider.overrideWithValue(analytics),
+        errorReporterProvider.overrideWithValue(reporter),
       ],
     );
   });
@@ -864,4 +873,157 @@ void main() {
       );
     },
   );
+
+  group('PokemonListViewModel — analytics (T-30b §12)', () {
+    test(
+      'build emits list_viewed{origin: cold} with the rendered count',
+      () async {
+        await pumpInitial();
+
+        final viewed = analytics.named('list_viewed');
+        expect(viewed, hasLength(1));
+        expect(viewed.single.parameters, {'origin': 'cold', 'count': 24});
+      },
+    );
+
+    test(
+      'clearing discovery back to browse emits list_viewed{origin: warm}',
+      () async {
+        await pumpInitial();
+        final vm = container.read(pokemonListViewModelProvider.notifier)
+          ..applyFilter(const PokemonFilter(types: {PokemonTypeId.fire}));
+        await Future<void>.delayed(Duration.zero);
+
+        // Clearing every axis returns to browse → _enterBrowse → warm view.
+        vm.applyFilter(null);
+        await Future<void>.delayed(Duration.zero);
+
+        final viewed = analytics.named('list_viewed');
+        expect(viewed.map((e) => e.parameters['origin']), ['cold', 'warm']);
+        // findPokemon stub returns a 3-item page; the warm view reports that
+        // count — guards against a count regression on browse re-entry.
+        expect(viewed.last.parameters, {'origin': 'warm', 'count': 3});
+      },
+    );
+
+    test(
+      'search emits search_performed with result_count only (RNF-09)',
+      () async {
+        await pumpInitial();
+
+        container.read(pokemonListViewModelProvider.notifier).search('pikachu');
+        await Future<void>.delayed(_overDebounce);
+        await Future<void>.delayed(Duration.zero);
+
+        final searched = analytics.named('search_performed');
+        expect(searched, hasLength(1));
+        // findPokemon stub returns a 3-item page; the term never appears.
+        expect(searched.single.parameters, {'result_count': 3});
+      },
+    );
+
+    test('applyFilter emits filter_applied presence flags', () async {
+      await pumpInitial();
+
+      container
+          .read(pokemonListViewModelProvider.notifier)
+          .applyFilter(
+            const PokemonFilter(
+              types: {PokemonTypeId.fire},
+              height: HeightCategory.tall,
+            ),
+          );
+
+      final applied = analytics.named('filter_applied');
+      expect(applied, hasLength(1));
+      expect(applied.single.parameters, {
+        'has_type': true,
+        'has_weakness': false,
+        'has_height': true,
+      });
+
+      // Clearing the filter is still a filter_applied — with all flags false.
+      container.read(pokemonListViewModelProvider.notifier).applyFilter(null);
+
+      expect(analytics.named('filter_applied'), hasLength(2));
+      expect(analytics.named('filter_applied').last.parameters, {
+        'has_type': false,
+        'has_weakness': false,
+        'has_height': false,
+      });
+    });
+
+    test('changeSort emits sort_changed with the criterion name', () async {
+      await pumpInitial();
+
+      container
+          .read(pokemonListViewModelProvider.notifier)
+          .changeSort(SortCriteria.nameAsc);
+
+      expect(
+        analytics.named('sort_changed').single.parameters,
+        {'criteria': 'nameAsc'},
+      );
+    });
+
+    test(
+      'selectGeneration emits generation_selected; clearing does not',
+      () async {
+        await pumpInitial();
+        final vm = container.read(pokemonListViewModelProvider.notifier)
+          ..selectGeneration(3);
+        await Future<void>.delayed(Duration.zero);
+
+        expect(
+          analytics.named('generation_selected').single.parameters,
+          {'generation': 3},
+        );
+
+        // Clearing the generation is a deselection — not an event.
+        vm.selectGeneration(null);
+        await Future<void>.delayed(Duration.zero);
+        expect(analytics.named('generation_selected'), hasLength(1));
+      },
+    );
+
+    test(
+      'swallowed loadMore failure reports captureError and emits error_shown',
+      () async {
+        await pumpInitial();
+
+        when(
+          () => getList.call(limit: 24, offset: 24),
+        ).thenAnswer((_) async => const Err(RateLimitFailure()));
+
+        await container.read(pokemonListViewModelProvider.notifier).loadMore();
+
+        // error_shown carries the mapped TE code (TE-08) + screen.
+        final shown = analytics.named('error_shown');
+        expect(shown, hasLength(1));
+        expect(shown.single.parameters, {
+          'te_code': 'TE-08',
+          'screen': 'pokemon_list',
+        });
+        // The handled failure is captured with its typed Failure.
+        expect(reporter.captured, hasLength(1));
+        expect(reporter.captured.single.failure, isA<RateLimitFailure>());
+      },
+    );
+
+    test(
+      'browse refresh failure reports the handled failure (TE-02 banner)',
+      () async {
+        await pumpInitial();
+
+        when(
+          () => getList.call(limit: 24, offset: 0),
+        ).thenAnswer((_) async => const Err(NetworkFailure()));
+
+        await container.read(pokemonListViewModelProvider.notifier).refresh();
+
+        expect(reporter.captured, hasLength(1));
+        expect(reporter.captured.single.failure, isA<NetworkFailure>());
+      },
+    );
+  });
 }

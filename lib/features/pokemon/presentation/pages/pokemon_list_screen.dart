@@ -8,6 +8,8 @@ import 'package:pokedex/app/layout/responsive_layout.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
 import 'package:pokedex/core/error/failure.dart';
+import 'package:pokedex/core/observability/analytics_event.dart';
+import 'package:pokedex/core/observability/observability_providers.dart';
 import 'package:pokedex/core/ui/components/pokemon_card.dart' as core;
 import 'package:pokedex/core/ui/components/search_field.dart';
 import 'package:pokedex/core/ui/components/shimmer_box.dart';
@@ -18,12 +20,17 @@ import 'package:pokedex/core/ui/states/generic_error_widget.dart';
 import 'package:pokedex/core/ui/states/offline_error_widget.dart';
 import 'package:pokedex/core/ui/states/stale_cache_banner.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
+import 'package:pokedex/features/pokemon/presentation/analytics/error_te_code.dart';
 import 'package:pokedex/features/pokemon/presentation/state/pokemon_list_state.dart';
 import 'package:pokedex/features/pokemon/presentation/view_models/pokemon_list_view_model.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/pokemon_card.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/sheets/filters_sheet.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/sheets/generations_sheet.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/sheets/sort_sheet.dart';
+
+/// `screen` property attached to every `error_shown` event from the Home list
+/// (matches the ViewModel's own screen tag).
+const String _screenName = 'pokemon_list';
 
 /// The Home / browse screen (UC-01..UC-05, UC-08).
 ///
@@ -157,7 +164,16 @@ class _PokemonListScreenState extends ConsumerState<PokemonListScreen> {
                 ),
                 const SizedBox(height: 20),
                 if (state != null && state.refreshError != null) ...[
-                  const StaleCacheBanner(),
+                  StaleCacheBanner(
+                    onShown: () => ref
+                        .read(analyticsServiceProvider)
+                        .logEvent(
+                          const ErrorShown(
+                            teCode: 'TE-02',
+                            screen: _screenName,
+                          ),
+                        ),
+                  ),
                   const SizedBox(height: 12),
                 ],
                 Expanded(
@@ -298,6 +314,9 @@ class _Body extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final state = async.value;
+    void reportShown(String teCode) => ref
+        .read(analyticsServiceProvider)
+        .logEvent(ErrorShown(teCode: teCode, screen: _screenName));
 
     // Pure error path: no usable state to fall back on. Checked BEFORE the
     // skeleton branch — Riverpod can emit `AsyncLoading.copyWithPrevious(
@@ -307,10 +326,19 @@ class _Body extends ConsumerWidget {
     // misleading spinner).
     if (state == null && async.hasError) {
       final error = async.error;
+      // The widget choice keys on connectivity; the TE code always flows
+      // through the single sealed-switch mapper (NetworkFailure/CacheFailure
+      // both map to TE-01).
       if (error is NetworkFailure || error is CacheFailure) {
-        return OfflineErrorWidget(onRetry: onRefresh);
+        return OfflineErrorWidget(
+          onRetry: onRefresh,
+          onShown: () => reportShown(teCodeForError(error)),
+        );
       }
-      return GenericErrorWidget(onRetry: onRefresh);
+      return GenericErrorWidget(
+        onRetry: onRefresh,
+        onShown: () => reportShown(teCodeForError(error)),
+      );
     }
 
     // Initial load with no cached state yet.
@@ -322,7 +350,10 @@ class _Body extends ConsumerWidget {
       // Defensive — the prior branches cover loading and error; this only
       // fires if the AsyncValue is in some unexpected new shape. Render the
       // generic widget instead of leaving the body blank (PRD §8.1).
-      return GenericErrorWidget(onRetry: onRefresh);
+      return GenericErrorWidget(
+        onRetry: onRefresh,
+        onShown: () => reportShown(teCodeForError(async.error)),
+      );
     }
 
     // We have items — render them (with optional stale banner already above).

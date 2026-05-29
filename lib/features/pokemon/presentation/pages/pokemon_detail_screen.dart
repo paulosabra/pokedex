@@ -8,6 +8,8 @@ import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
 import 'package:pokedex/app/theme/pokemon_type_theme.dart';
 import 'package:pokedex/core/error/failure.dart';
+import 'package:pokedex/core/observability/analytics_event.dart';
+import 'package:pokedex/core/observability/observability_providers.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
 import 'package:pokedex/core/ui/components/shimmer_box.dart';
 import 'package:pokedex/core/ui/components/type_badge.dart';
@@ -15,6 +17,7 @@ import 'package:pokedex/core/ui/states/generic_error_widget.dart';
 import 'package:pokedex/core/ui/states/offline_error_widget.dart';
 import 'package:pokedex/core/utils/string_utils.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_detail.dart';
+import 'package:pokedex/features/pokemon/presentation/analytics/error_te_code.dart';
 import 'package:pokedex/features/pokemon/presentation/pages/pokemon_list_screen.dart';
 import 'package:pokedex/features/pokemon/presentation/view_models/pokemon_detail_view_model.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/detail/about_tab.dart';
@@ -451,16 +454,20 @@ class _DotPatternPainter extends CustomPainter {
 /// Faint white pokeball watermark + the three-tab row. The pokeball tracks
 /// the active tab horizontally (Figma `Pokeball` `321:426` / `321:494`) so
 /// it sits behind whichever tab is currently selected.
-class _Tabs extends StatefulWidget {
+class _Tabs extends ConsumerStatefulWidget {
   const _Tabs();
 
   @override
-  State<_Tabs> createState() => _TabsState();
+  ConsumerState<_Tabs> createState() => _TabsState();
 }
 
-class _TabsState extends State<_Tabs> {
+class _TabsState extends ConsumerState<_Tabs> {
   TabController? _controller;
   Animation<double>? _animation;
+
+  /// Last tab index reported to analytics — seeded from the controller's
+  /// initial index so the first-shown tab does not count as a change.
+  int _reportedIndex = 0;
 
   @override
   void didChangeDependencies() {
@@ -469,6 +476,7 @@ class _TabsState extends State<_Tabs> {
     if (_controller != next) {
       _animation?.removeListener(_handleTick);
       _controller = next;
+      _reportedIndex = next.index;
       _animation = next.animation;
       _animation?.addListener(_handleTick);
     }
@@ -480,7 +488,28 @@ class _TabsState extends State<_Tabs> {
     super.dispose();
   }
 
-  void _handleTick() => setState(() {});
+  void _handleTick() {
+    setState(() {});
+    _maybeReportTabChange();
+  }
+
+  /// PRD §12 `detail_tab_changed`: emit once when the selection settles on a
+  /// new tab index — not on every animation frame, and not for the initial
+  /// tab (guarded by [_reportedIndex]).
+  void _maybeReportTabChange() {
+    final index = _controller?.index;
+    if (index == null || index == _reportedIndex) return;
+    _reportedIndex = index;
+    ref
+        .read(analyticsServiceProvider)
+        .logEvent(DetailTabChanged(tab: _tabForIndex(index)));
+  }
+
+  static DetailTab _tabForIndex(int index) => switch (index) {
+    0 => DetailTab.about,
+    1 => DetailTab.stats,
+    _ => DetailTab.evolution,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -608,14 +637,20 @@ class _Loading extends StatelessWidget {
   }
 }
 
-class _Error extends StatelessWidget {
+class _Error extends ConsumerWidget {
   const _Error({required this.error});
+
+  /// `screen` property attached to the detail screen's `error_shown` events.
+  static const String _screenName = 'pokemon_detail';
 
   final Object error;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isOffline = error is NetworkFailure || error is CacheFailure;
+    void reportShown(String teCode) => ref
+        .read(analyticsServiceProvider)
+        .logEvent(ErrorShown(teCode: teCode, screen: _screenName));
     // No AppBar — the error widget's centered CTA is the single Back
     // affordance (resolved review finding: two back affordances confuse users
     // and split visual focus).
@@ -626,11 +661,13 @@ class _Error extends StatelessWidget {
               message: 'You are offline and this Pokémon is not cached.',
               retryLabel: 'Back',
               onRetry: () => _back(context),
+              onShown: () => reportShown(teCodeForError(error)),
             )
           : GenericErrorWidget(
               message: 'Could not load this Pokémon.',
               retryLabel: 'Back',
               onRetry: () => _back(context),
+              onShown: () => reportShown(teCodeForError(error)),
             ),
     );
   }
