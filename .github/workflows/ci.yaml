@@ -30,8 +30,11 @@ jobs:
           channel: stable
           flutter-version: 3.44.0
 
+      # --enforce-lockfile so the gate measures the exact locked graph (the
+      # analyzer-9 codegen pins live in pubspec.lock); a silent re-resolve must
+      # fail CI rather than drift.
       - name: Install dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       # Generated code is git-ignored, so a fresh clone must regenerate before
       # analyze/test. This also validates that the codegen builder graph instantiates.
@@ -46,3 +49,72 @@ jobs:
 
       - name: Run tests
         run: flutter test --coverage
+
+      # Honest, enforced coverage gate (T-29). Strip generated code so the gate
+      # measures only what we author, then enforce ≥80% with a zero-dependency
+      # check. We deliberately do NOT use `very_good test --min-coverage`: it
+      # re-runs the suite and re-measures *unfiltered* coverage, undoing the
+      # `lcov --remove`.
+      #
+      # 4 globs (not 5): `*.mocks.dart` is mockito codegen — this project uses
+      # mocktail, which generates nothing, so that glob is dead. `*.drift.dart`
+      # / `*.config.dart` are kept as forward-safety for real codegen outputs if
+      # those generators are ever added. Measured post-exclusion baseline: 94.8%.
+      - name: Enforce coverage floor (hand-written only)
+        run: |
+          sudo apt-get install -y lcov
+          lcov --remove coverage/lcov.info \
+            '*.g.dart' '*.freezed.dart' '*.drift.dart' '*.config.dart' \
+            -o coverage/lcov.info --ignore-errors unused
+          awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{if(lf==0){print "no instrumented lines after exclusion"; exit 1} p=100*lh/lf; printf "coverage: %.1f%%\n",p; exit (p<80)}' coverage/lcov.info
+
+  # E2E lives in its own job so `flutter drive` never writes into the lcov file
+  # the coverage gate measures (keeps "E2E is not in the gate" honest). Runs the
+  # two critical flows on headless Chrome — the same Drift-WASM/web stack the
+  # production deploy targets.
+  e2e:
+    runs-on: ubuntu-latest
+    # Gate E2E behind the unit-test + coverage job so a green E2E can never mask
+    # a failing gate, and so a broken build skips the (slower) drive entirely.
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          # Keep in sync with the `build` job's pin (deterministic builds).
+          channel: stable
+          flutter-version: 3.44.0
+
+      - name: Install dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Generate code
+        run: dart run build_runner build
+
+      - name: Set up ChromeDriver
+        uses: nanasess/setup-chromedriver@v2
+
+      # Start in the background, then poll /status so `flutter drive` never
+      # races a not-yet-listening driver on a busy runner.
+      - name: Start ChromeDriver
+        run: |
+          chromedriver --port=4444 &
+          for _ in $(seq 1 10); do
+            if curl -sf http://localhost:4444/status >/dev/null; then
+              echo "chromedriver ready"; exit 0
+            fi
+            sleep 1
+          done
+          echo "chromedriver did not become ready" >&2; exit 1
+
+      # `--target=integration_test/app_test.dart` deliberately omits `--coverage`
+      # so E2E coverage is never merged into the gated lcov.
+      - name: Run E2E (headless Chrome)
+        run: |
+          flutter drive \
+            --driver=test_driver/integration_test.dart \
+            --target=integration_test/app_test.dart \
+            -d web-server --browser-name chrome --headless
