@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:pokedex/app/app.dart';
+import 'package:pokedex/app/router/app_router.dart';
 import 'package:pokedex/features/pokemon/presentation/pages/pokemon_detail_screen.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/detail/about_tab.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/pokemon_card.dart'
@@ -81,5 +84,33 @@ void main() {
 
     // The last id of page 2 is reachable → the next page was fetched.
     expect(cardNumber(48), findsOneWidget);
+  });
+
+  // C-1 (T-31): once the SPA rewrite serves index.html for every path, a
+  // malformed or unknown deep link is reachable in-app. Both must render the
+  // TE-03 page (RouteErrorScreen) rather than crashing. Driven through the real
+  // router from `routerProvider`, colocated with the fix it verifies.
+  testWidgets('C-1: malformed and unmatched deep links render TE-03', (
+    tester,
+  ) async {
+    await E2EHarness().pumpApp(tester);
+
+    // Non-numeric id → int.tryParse returns null → TE-03 (deterministic on web,
+    // unlike an int64-overflow id whose web parse is lossy).
+    final router = ProviderScope.containerOf(
+      tester.element(find.byType(PokedexApp)),
+    ).read(routerProvider)..go('/pokemon/abc');
+    await tester.pumpAndSettle();
+    expect(find.text("This page doesn't exist."), findsOneWidget);
+
+    // Any unmatched path → GoRouter errorBuilder → the same TE-03 page.
+    router.go('/no-such-route');
+    await tester.pumpAndSettle();
+    expect(find.text("This page doesn't exist."), findsOneWidget);
+
+    // The "Go home" CTA recovers to the list.
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Go home'));
+    await tester.pumpAndSettle();
+    expect(find.byType(adapter.PokemonCard), findsWidgets);
   });
 }
