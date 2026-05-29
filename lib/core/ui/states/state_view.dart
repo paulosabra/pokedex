@@ -55,36 +55,52 @@ class StateView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final showAction = actionLabel != null && onAction != null;
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(40, 32, 40, 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _Hero(glyph: glyph),
-            const SizedBox(height: 28),
-            Text(
-              title,
-              style: AppTypography.sheetTitle,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              body,
-              style: AppTypography.description,
-              textAlign: TextAlign.center,
-            ),
-            if (showAction) ...[
-              const SizedBox(height: 28),
-              _ActionButton(
-                label: actionLabel!,
-                onPressed: onAction!,
-                style: actionStyle,
+    // The hero + title + body + button stack is ~390px tall. On a normal
+    // device viewport there's slack to center it vertically; on constrained
+    // surfaces (small phones, 400×400 golden harness) the previous
+    // `Center > Column(min)` layout reported a RenderFlex overflow to the
+    // framework — flutter_test surfaces that as a test-failing
+    // "EXCEPTION CAUGHT BY RENDERING LIBRARY" event. The LayoutBuilder
+    // pattern below keeps the content centered when the viewport can hold
+    // it and falls back to scrolling when it can't.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(40, 32, 40, 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _Hero(glyph: glyph),
+                  const SizedBox(height: 28),
+                  Text(
+                    title,
+                    style: AppTypography.sheetTitle,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    body,
+                    style: AppTypography.description,
+                    textAlign: TextAlign.center,
+                  ),
+                  if (showAction) ...[
+                    const SizedBox(height: 28),
+                    _ActionButton(
+                      label: actionLabel!,
+                      onPressed: onAction!,
+                      style: actionStyle,
+                    ),
+                  ],
+                ],
               ),
-            ],
-          ],
-        ),
-      ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

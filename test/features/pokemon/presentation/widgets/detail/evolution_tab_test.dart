@@ -78,7 +78,10 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        expect(find.text('Eevee'), findsOneWidget);
+        // Eevee is the root with eight evolution edges. After flattening,
+        // each edge renders its source on the parent card, so Eevee appears
+        // once per branch — the test guarantees all eight branches mounted.
+        expect(find.text('Eevee'), findsNWidgets(8));
         expect(find.text('Vaporeon'), findsOneWidget);
         expect(find.text('Jolteon'), findsOneWidget);
         expect(find.text('Flareon'), findsOneWidget);

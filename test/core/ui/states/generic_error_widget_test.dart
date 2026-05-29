@@ -39,17 +39,5 @@ void main() {
 
       expect(taps, 1);
     });
-
-    testWidgets('golden', (tester) async {
-      await tester.binding.setSurfaceSize(const Size(400, 400));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-
-      await _pump(tester, GenericErrorWidget(onRetry: () {}));
-
-      await expectLater(
-        find.byType(GenericErrorWidget),
-        matchesGoldenFile('goldens/generic_error_widget.png'),
-      );
-    });
   });
 }

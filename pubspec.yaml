@@ -1,6 +1,6 @@
 name: pokedex
 description: "Offline-first, multiplatform Pokédex — browse, search, and explore Pokémon from the PokéAPI."
-publish_to: 'none'
+publish_to: "none"
 
 version: 1.0.0+1
 

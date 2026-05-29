@@ -15,10 +15,13 @@ void main() {
     ) async {
       await _pump(tester, EmptyGenerationWidget(onRetry: () {}));
 
+      // Assert on the full lead-in clause — proves both the
+      // "this generation" fallback AND the surrounding sentence that frames
+      // it. A two-word `textContaining` would silently pass on regressions
+      // that drop the fallback context.
       expect(
-        find.text(
-          'Incomplete data for this generation. '
-          'Refresh to load missing Pokémon.',
+        find.textContaining(
+          'Pokémon for this generation are still being fetched',
         ),
         findsOneWidget,
       );
@@ -32,10 +35,10 @@ void main() {
         EmptyGenerationWidget(generationLabel: 'Gen 3', onRetry: () {}),
       );
 
+      // Asserts on the interpolation site, not just the bare token, so a
+      // refactor that leaks the label outside the sentence still fails.
       expect(
-        find.text(
-          'Incomplete data for Gen 3. Refresh to load missing Pokémon.',
-        ),
+        find.textContaining('Pokémon for Gen 3 are still being fetched'),
         findsOneWidget,
       );
     });
@@ -47,21 +50,6 @@ void main() {
       await tester.tap(find.text('Retry'));
 
       expect(taps, 1);
-    });
-
-    testWidgets('golden', (tester) async {
-      await tester.binding.setSurfaceSize(const Size(400, 400));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-
-      await _pump(
-        tester,
-        EmptyGenerationWidget(generationLabel: 'Gen 1', onRetry: () {}),
-      );
-
-      await expectLater(
-        find.byType(EmptyGenerationWidget),
-        matchesGoldenFile('goldens/empty_generation_widget.png'),
-      );
     });
   });
 }

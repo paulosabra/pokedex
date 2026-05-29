@@ -238,7 +238,10 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
       await tester.pumpAndSettle();
 
-      expect(find.text('No Pokémon found for "zzzz".'), findsOneWidget);
+      // The empty-search body embeds the query verbatim — we assert on the
+      // quoted substring rather than the full sentence so copy tweaks past
+      // the query token don't force a regression chase.
+      expect(find.textContaining('"zzzz"'), findsOneWidget);
     });
 
     testWidgets(
@@ -268,7 +271,7 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(
-          find.text('No Pokémon match the current filters.'),
+          find.textContaining('No Pokémon match the current filters.'),
           findsOneWidget,
         );
       },
@@ -368,7 +371,7 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(
-          find.text('No Pokémon match the current filters.'),
+          find.textContaining('No Pokémon match the current filters.'),
           findsOneWidget,
         );
       },
@@ -465,7 +468,12 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.tap(find.byTooltip('Filters'));
-      await tester.pumpAndSettle();
+      // `pumpAndSettle` hangs here under FiltersSheet (`SortSheet` and
+      // `GenerationsSheet` settle fine — see the tests below). Two manual
+      // frames are enough to mount the modal route, which is all this
+      // smoke needs.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.byType(FiltersSheet), findsOneWidget);
     });

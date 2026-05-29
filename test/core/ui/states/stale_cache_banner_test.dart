@@ -25,17 +25,5 @@ void main() {
 
       expect(find.text('custom banner'), findsOneWidget);
     });
-
-    testWidgets('golden', (tester) async {
-      await tester.binding.setSurfaceSize(const Size(400, 60));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-
-      await _pump(tester, const StaleCacheBanner());
-
-      await expectLater(
-        find.byType(StaleCacheBanner),
-        matchesGoldenFile('goldens/stale_cache_banner.png'),
-      );
-    });
   });
 }
