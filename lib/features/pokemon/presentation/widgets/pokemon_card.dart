@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
+import 'package:pokedex/core/observability/analytics_event.dart';
+import 'package:pokedex/core/observability/observability_providers.dart';
 import 'package:pokedex/core/ui/components/pokemon_card.dart' as core;
 import 'package:pokedex/core/ui/components/shimmer_box.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
@@ -19,7 +24,7 @@ import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 /// served from the index before its detail has hydrated. The skeleton card
 /// keeps the list's visual rhythm (same height + layout) but replaces the
 /// type-tinted body with a neutral surface and shimmer chips.
-class PokemonCard extends StatelessWidget {
+class PokemonCard extends ConsumerWidget {
   /// Creates a [PokemonCard].
   const PokemonCard({required this.pokemon, this.compact = false, super.key});
 
@@ -32,14 +37,30 @@ class PokemonCard extends StatelessWidget {
   final bool compact;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // PRD §12 `pokemon_opened`: log the open, then navigate. A skeleton row
+    // has no hydrated type yet, so its primary type is reported as `unknown`.
+    void open() {
+      ref
+          .read(analyticsServiceProvider)
+          .logEvent(
+            PokemonOpened(
+              id: pokemon.id,
+              primaryType: pokemon.types.isEmpty
+                  ? 'unknown'
+                  : pokemon.types.first.name,
+            ),
+          );
+      unawaited(context.push('/pokemon/${pokemon.id}'));
+    }
+
     if (pokemon.isSkeleton) {
       return _SkeletonPokemonCard(
         id: pokemon.id,
         name: pokemon.name,
         imageUrl: pokemon.imageUrl,
         compact: compact,
-        onTap: () => context.push('/pokemon/${pokemon.id}'),
+        onTap: open,
       );
     }
     final types = pokemon.types;
@@ -50,7 +71,7 @@ class PokemonCard extends StatelessWidget {
       secondaryType: types.length > 1 ? types[1] : null,
       imageUrl: pokemon.imageUrl,
       compact: compact,
-      onTap: () => context.push('/pokemon/${pokemon.id}'),
+      onTap: open,
     );
   }
 }

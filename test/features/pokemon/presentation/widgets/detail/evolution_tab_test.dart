@@ -5,9 +5,11 @@ import 'package:go_router/go_router.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/error/result.dart';
+import 'package:pokedex/core/observability/observability_providers.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/get_evolution_chain.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/detail/evolution_tab.dart';
 
+import '../../../../../helpers/recording_observability.dart';
 import '../../fixtures/eevee_evolution_chain.dart';
 
 class _MockGetEvolutionChain extends Mock implements GetEvolutionChain {}
@@ -19,13 +21,18 @@ Future<void> _pump(
   required _MockGetEvolutionChain getChain,
   required int id,
   GoRouter? router,
+  RecordingAnalytics? analytics,
   Size size = const Size(414, 1200),
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
 
   final app = ProviderScope(
-    overrides: [getEvolutionChainProvider.overrideWithValue(getChain)],
+    overrides: [
+      getEvolutionChainProvider.overrideWithValue(getChain),
+      if (analytics != null)
+        analyticsServiceProvider.overrideWithValue(analytics),
+    ],
     child: router != null
         ? MaterialApp.router(routerConfig: router)
         : MaterialApp(
@@ -202,6 +209,52 @@ void main() {
         // go (false): push keeps the previous route on the stack so
         // system-back returns to the chain view.
         expect(router.canPop(), isTrue);
+      },
+    );
+
+    testWidgets(
+      'tapping a stage emits evolution_navigated{source_id, dest_id}',
+      (tester) async {
+        final getChain = _MockGetEvolutionChain();
+        when(
+          () => getChain.call(1),
+        ).thenAnswer((_) async => Ok(bulbasaurEvolutionChain()));
+
+        final analytics = RecordingAnalytics();
+        final router = GoRouter(
+          routes: [
+            GoRoute(
+              path: '/',
+              builder: (_, _) => const Scaffold(
+                body: EvolutionTab(id: 1, accent: _accent),
+              ),
+            ),
+            GoRoute(
+              path: '/pokemon/:id',
+              builder: (_, state) => Scaffold(
+                body: Text('detail:${state.pathParameters['id']}'),
+              ),
+            ),
+          ],
+        );
+
+        await _pump(
+          tester,
+          getChain: getChain,
+          id: 1,
+          router: router,
+          analytics: analytics,
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Venusaur'));
+        await tester.pumpAndSettle();
+
+        final nav = analytics.named('evolution_navigated');
+        expect(nav, hasLength(1));
+        // Source is the viewed Pokémon (id 1); dest is the tapped stage
+        // (Venusaur, id 3).
+        expect(nav.single.parameters, {'source_id': 1, 'dest_id': 3});
       },
     );
   });

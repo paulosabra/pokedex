@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/error/result.dart';
+import 'package:pokedex/core/observability/observability_providers.dart';
 import 'package:pokedex/core/ui/components/shimmer_box.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/get_evolution_chain.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/get_pokemon_detail.dart';
@@ -13,6 +14,7 @@ import 'package:pokedex/features/pokemon/presentation/widgets/detail/about_tab.d
 import 'package:pokedex/features/pokemon/presentation/widgets/detail/evolution_tab.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/detail/stats_tab.dart';
 
+import '../../../../helpers/recording_observability.dart';
 import '../fixtures/eevee_evolution_chain.dart';
 import '../fixtures/pokemon_detail_builder.dart';
 
@@ -44,6 +46,7 @@ Future<void> _pumpScreen(
   WidgetTester tester, {
   required _Harness harness,
   int id = 1,
+  RecordingAnalytics? analytics,
   Size size = const Size(420, 1000),
 }) async {
   await tester.binding.setSurfaceSize(size);
@@ -53,6 +56,8 @@ Future<void> _pumpScreen(
       overrides: [
         getPokemonDetailProvider.overrideWithValue(harness.getDetail),
         getEvolutionChainProvider.overrideWithValue(harness.getChain),
+        if (analytics != null)
+          analyticsServiceProvider.overrideWithValue(analytics),
       ],
       child: MaterialApp(home: PokemonDetailScreen(id: id)),
     ),
@@ -216,6 +221,79 @@ void main() {
 
         expect(visited, contains('/'));
         expect(find.text('list'), findsOneWidget);
+      },
+    );
+  });
+
+  group('PokemonDetailScreen — analytics (T-30b §12)', () {
+    testWidgets(
+      'switching tabs emits detail_tab_changed (never for the initial tab)',
+      (tester) async {
+        final harness = _makeHarness();
+        final analytics = RecordingAnalytics();
+        await _pumpScreen(tester, harness: harness, analytics: analytics);
+        await tester.pumpAndSettle();
+
+        // The first-shown About tab is not a change.
+        expect(analytics.named('detail_tab_changed'), isEmpty);
+
+        await tester.tap(find.text('Stats'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Evolution'));
+        await tester.pumpAndSettle();
+        // Tap back to About so all three DetailTab values are exercised.
+        await tester.tap(find.text('About'));
+        await tester.pumpAndSettle();
+
+        final tabs = analytics
+            .named('detail_tab_changed')
+            .map((e) => e.parameters['tab'])
+            .toList();
+        expect(tabs, ['stats', 'evolution', 'about']);
+      },
+    );
+
+    testWidgets(
+      'offline failure emits error_shown TE-01 on the detail screen',
+      (
+        tester,
+      ) async {
+        final harness = _makeHarness();
+        when(
+          () => harness.getDetail.call(any()),
+        ).thenAnswer((_) async => const Err(NetworkFailure()));
+        final analytics = RecordingAnalytics();
+
+        await _pumpScreen(tester, harness: harness, analytics: analytics);
+        await tester.pumpAndSettle();
+
+        final shown = analytics.named('error_shown');
+        expect(shown, hasLength(1));
+        expect(shown.single.parameters, {
+          'te_code': 'TE-01',
+          'screen': 'pokemon_detail',
+        });
+      },
+    );
+
+    testWidgets(
+      'generic failure emits error_shown TE-07 on the detail screen',
+      (
+        tester,
+      ) async {
+        final harness = _makeHarness();
+        when(
+          () => harness.getDetail.call(any()),
+        ).thenAnswer((_) async => const Err(ServerFailure()));
+        final analytics = RecordingAnalytics();
+
+        await _pumpScreen(tester, harness: harness, analytics: analytics);
+        await tester.pumpAndSettle();
+
+        expect(analytics.named('error_shown').single.parameters, {
+          'te_code': 'TE-07',
+          'screen': 'pokemon_detail',
+        });
       },
     );
   });
