@@ -1,0 +1,65 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Generated code (regenerate with `dart run build_runner build`)
+*.g.dart
+*.freezed.dart
+*.drift.dart
+*.mocks.dart
+*.config.dart
+
+# IDE-generated devtools workspace state
+devtools_options.yaml
+
+# Claude Code workspace state
+.claude/
+
+# Vercel project linkage (`vercel link` / `vercel pull`) — local only, never commit
+.vercel/
+
+# Secrets — analytics/deploy keys must never be committed (passed via --dart-define)
+.env*
+.vercel

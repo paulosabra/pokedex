@@ -1,0 +1,142 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:pokedex/features/pokemon/data/repositories/pokemon_repository_impl.dart';
+import 'package:pokedex/features/pokemon/domain/entities/index_state.dart';
+import 'package:pokedex/features/pokemon/domain/repositories/pokemon_repository.dart';
+import 'package:pokedex/features/pokemon/presentation/widgets/sheets/generations_sheet.dart';
+
+class _FakeRepository implements PokemonRepository {
+  _FakeRepository(this.indexState);
+
+  IndexState indexState;
+
+  @override
+  Future<IndexState> readIndexState() async => indexState;
+
+  @override
+  Future<List<int>> listGenerationMembers(int generationId) async => const [];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnsupportedError(
+    'Unexpected repository call ${invocation.memberName}',
+  );
+}
+
+Future<Future<GenerationsSheetResult?>> _openSheet(
+  WidgetTester tester, {
+  int? initial,
+  IndexState? indexState,
+}) async {
+  await tester.binding.setSurfaceSize(const Size(420, 1000));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+
+  final repo = _FakeRepository(indexState ?? IndexState.idle());
+
+  final completer = Completer<GenerationsSheetResult?>();
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [pokemonRepositoryProvider.overrideWithValue(repo)],
+      child: MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: ElevatedButton(
+              onPressed: () async {
+                final r = await showModalBottomSheet<GenerationsSheetResult>(
+                  context: context,
+                  isScrollControlled: true,
+                  builder: (_) => GenerationsSheet(initial: initial),
+                );
+                completer.complete(r);
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.tap(find.text('open'));
+  await tester.pumpAndSettle();
+  return completer.future;
+}
+
+void main() {
+  group('GenerationsSheet', () {
+    testWidgets('renders the plural title and the Gen 1 card', (tester) async {
+      await _openSheet(tester);
+
+      expect(find.text('Generations'), findsOneWidget);
+      expect(find.text('Generation I'), findsOneWidget);
+    });
+
+    testWidgets('tapping a generation pops with its id (tap = apply)', (
+      tester,
+    ) async {
+      final future = await _openSheet(tester);
+
+      await tester.tap(find.text('Generation I'));
+      await tester.pumpAndSettle();
+
+      final result = await future;
+      expect(result, isNotNull);
+      expect(result!.value, 1);
+    });
+
+    testWidgets('tapping the active generation again clears it', (
+      tester,
+    ) async {
+      final future = await _openSheet(tester, initial: 1);
+
+      await tester.tap(find.text('Generation I'));
+      await tester.pumpAndSettle();
+
+      final result = await future;
+      expect(result, isNotNull);
+      expect(result!.value, isNull);
+    });
+
+    testWidgets(
+      'Clear pops with a null value even when a generation is active',
+      (tester) async {
+        final future = await _openSheet(tester, initial: 1);
+
+        expect(find.text('Clear'), findsOneWidget);
+        await tester.tap(find.text('Clear'));
+        await tester.pumpAndSettle();
+
+        final result = await future;
+        expect(result, isNotNull);
+        expect(result!.value, isNull);
+      },
+    );
+
+    testWidgets('Clear button is hidden when no generation is active', (
+      tester,
+    ) async {
+      await _openSheet(tester);
+
+      expect(find.text('Clear'), findsNothing);
+    });
+
+    testWidgets(
+      'dismissal without picking pops `null` so caller leaves the '
+      'generation untouched',
+      (tester) async {
+        final future = await _openSheet(tester, initial: 1);
+
+        // Pops the modal route directly to assert the null-result contract.
+        // `tester.tapAt(Offset(10, 10))` against the modal barrier hangs in
+        // flutter_test when the sheet uses `isScrollControlled: true`, so
+        // the barrier-tap path is no longer exercised here.
+        Navigator.of(tester.element(find.byType(GenerationsSheet))).pop();
+        await tester.pumpAndSettle();
+
+        final result = await future;
+        expect(result, isNull);
+      },
+    );
+  });
+}

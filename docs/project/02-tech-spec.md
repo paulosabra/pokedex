@@ -463,6 +463,18 @@ class EvolutionStage with _$EvolutionStage {
     String? condition,                     // ex.: "Level 16" (RF-41)
   }) = _EvolutionStage;
 }
+
+enum HeightCategory { short, medium, tall } // RF-16 buckets
+
+@freezed
+class PokemonFilter with _$PokemonFilter {  // RN-08 intersection of filters
+  const factory PokemonFilter({
+    @Default(<PokemonTypeId>{}) Set<PokemonTypeId> types,        // RF-14
+    @Default(<PokemonTypeId>{}) Set<PokemonTypeId> weaknesses,   // RF-15
+    HeightCategory? height,                                       // RF-16
+    int? generationId,                                            // UC-05 (PR1 revision)
+  }) = _PokemonFilter;
+}
 ```
 
 ### 8.3 Interface de repositório (domínio)
@@ -472,9 +484,15 @@ abstract interface class PokemonRepository {
   Future<Result<PokemonPage>>     getPokemonList({required int limit, required int offset});
   Future<Result<PokemonDetail>>   getPokemonDetail(int id);
   Future<Result<EvolutionChain>>  getEvolutionChain(int id);
-  Future<Result<List<Pokemon>>>   search(String query);          // RN-06/07
-  Future<Result<List<Pokemon>>>   filter(PokemonFilter filter);  // RF-14..17
-  Stream<List<Pokemon>>           watchCachedSummaries();        // reativo (Drift)
+  Future<Result<List<Pokemon>>>   findPokemon({                 // RN-06/07/08
+    required SortCriteria sort,
+    String? query,
+    PokemonFilter? filter,
+  });
+  Stream<List<Pokemon>>           watchCachedSummaries({        // reativo (Drift)
+    required SortCriteria sort,
+    PokemonFilter? filter,
+  });
 }
 ```
 
