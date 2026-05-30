@@ -62,3 +62,4 @@ devtools_options.yaml
 
 # Secrets — analytics/deploy keys must never be committed (passed via --dart-define)
 .env*
+.vercel
