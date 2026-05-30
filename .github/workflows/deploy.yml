@@ -1,0 +1,94 @@
+name: Deploy (Vercel, prebuilt)
+
+# GitHub Actions builds the Flutter web artifact and pushes it to Vercel
+# prebuilt (T-31).
+#
+# Production publishes ONLY on a push to `main` (the `push` trigger lists no
+# other branch), so an `epic/**` or `develop` push never promotes — those
+# branches belong to the CI workflow, not this one. Previews, by contrast, run
+# for EVERY pull request regardless of its target branch; a preview is an
+# isolated, analytics-dark URL (§4.4), so this breadth is intentional and safe.
+on:
+  push:
+    branches: [main] # production — main only
+  pull_request: # preview — every PR
+
+# Serialize deploys per ref so a newer push supersedes an in-flight one rather
+# than racing it to promotion.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+  # Passed explicitly via --token on every vercel command: the CLI does NOT
+  # read VERCEL_TOKEN from the environment for `vercel pull` (it errors with
+  # "No existing credentials found. Please run `vercel login` or pass --token").
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  # `--prod` and the environment tag both key off the target branch; `PROD` is
+  # non-empty only on `main`, so it doubles as the "is this production?" flag.
+  PROD: ${{ github.ref == 'refs/heads/main' && '--prod' || '' }}
+  TARGET_ENV: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          # Keep in sync with the CI workflow's pin (deterministic builds).
+          channel: stable
+          flutter-version: 3.44.0
+
+      # --enforce-lockfile so the deployed artifact is built from the exact
+      # locked graph the gate measured (the analyzer-9 codegen pins live in
+      # pubspec.lock); a silent re-resolve must fail rather than drift.
+      - name: Install dependencies
+        run: flutter pub get --enforce-lockfile
+
+      # Generated code is git-ignored, so a fresh clone must regenerate first.
+      - name: Generate code
+        run: dart run build_runner build
+
+      # Pinned (not @latest) so a CLI release can never silently change deploy
+      # behaviour mid-stream.
+      - name: Install Vercel CLI
+        run: npm i -g vercel@54.6.1
+
+      - name: Pull Vercel environment
+        run: vercel pull --yes --environment=$TARGET_ENV --token=$VERCEL_TOKEN
+
+      # Flags are passed from secrets/literals via the environment — never
+      # interpolated into the command string (avoids shell-injection on secret
+      # values; see GitHub's workflow-injection guidance). A preview omits
+      # ANALYTICS_ENABLED and the prod DSN/key, so it stays dark and never emits
+      # to production analytics/crash projects (§4.4); only a `main` build turns
+      # analytics on and injects the keyed vendors. The bash array keeps each
+      # `--dart-define` a single argv entry regardless of the value's contents.
+      - name: Build Flutter web
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+        run: |
+          defines=(--dart-define=ENVIRONMENT="$TARGET_ENV")
+          # PROD is non-empty only on `main` — the production build.
+          if [ -n "$PROD" ]; then
+            defines+=(--dart-define=ANALYTICS_ENABLED=true)
+            defines+=(--dart-define=SENTRY_DSN="$SENTRY_DSN")
+            defines+=(--dart-define=POSTHOG_KEY="$POSTHOG_KEY")
+          fi
+          flutter build web --release "${defines[@]}"
+
+      # Atomic: build the deployment artifact, then promote it. A failed build
+      # exits non-zero and the job stops before `deploy`, so a broken build can
+      # never promote (I-5).
+      - name: Build Vercel deployment
+        run: vercel build $PROD --token=$VERCEL_TOKEN
+
+      - name: Deploy prebuilt artifact
+        run: vercel deploy --prebuilt $PROD --token=$VERCEL_TOKEN
