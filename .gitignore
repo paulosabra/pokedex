@@ -56,3 +56,10 @@ devtools_options.yaml
 
 # Claude Code workspace state
 .claude/
+
+# Vercel project linkage (`vercel link` / `vercel pull`) — local only, never commit
+.vercel/
+
+# Secrets — analytics/deploy keys must never be committed (passed via --dart-define)
+.env*
+.vercel

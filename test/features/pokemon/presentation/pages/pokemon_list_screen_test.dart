@@ -8,6 +8,7 @@ import 'package:mocktail/mocktail.dart';
 import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/error/result.dart';
 import 'package:pokedex/core/network/connectivity_provider.dart';
+import 'package:pokedex/core/observability/observability_providers.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
 import 'package:pokedex/core/ui/states/empty_generation_widget.dart';
 import 'package:pokedex/core/ui/states/generic_error_widget.dart';
@@ -30,6 +31,8 @@ import 'package:pokedex/features/pokemon/presentation/widgets/pokemon_card.dart'
 import 'package:pokedex/features/pokemon/presentation/widgets/sheets/filters_sheet.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/sheets/generations_sheet.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/sheets/sort_sheet.dart';
+
+import '../../../../helpers/recording_observability.dart';
 
 class _MockGetPokemonList extends Mock implements GetPokemonList {}
 
@@ -138,6 +141,7 @@ _ListHarness _makeHarness({
 Future<void> _pumpScreen(
   WidgetTester tester, {
   required _ListHarness harness,
+  RecordingAnalytics? analytics,
   Size size = const Size(420, 1000),
 }) async {
   // Pin devicePixelRatio so the surface size translates 1:1 to logical pixels.
@@ -158,6 +162,8 @@ Future<void> _pumpScreen(
         watchPokemonListProvider.overrideWithValue(harness.watch),
         pokemonRepositoryProvider.overrideWithValue(coverage.repo),
         connectivityProvider.overrideWithValue(coverage.connectivity),
+        if (analytics != null)
+          analyticsServiceProvider.overrideWithValue(analytics),
       ],
       child: const MaterialApp(home: PokemonListScreen()),
     ),
@@ -455,6 +461,77 @@ void main() {
         expect(find.byType(adapter.PokemonCard), findsWidgets);
       },
     );
+  });
+
+  group('PokemonListScreen — error_shown analytics (T-30b §4.3)', () {
+    testWidgets('offline error widget emits error_shown TE-01', (tester) async {
+      final harness = _makeHarness();
+      when(
+        () => harness.getList.call(
+          limit: any(named: 'limit'),
+          offset: any(named: 'offset'),
+        ),
+      ).thenAnswer((_) async => const Err(NetworkFailure()));
+      final analytics = RecordingAnalytics();
+
+      await _pumpScreen(tester, harness: harness, analytics: analytics);
+      await tester.pumpAndSettle();
+      await tester.pump();
+
+      final shown = analytics.named('error_shown');
+      expect(shown, hasLength(1));
+      expect(shown.single.parameters, {
+        'te_code': 'TE-01',
+        'screen': 'pokemon_list',
+      });
+    });
+
+    testWidgets('generic error widget emits error_shown TE-07', (tester) async {
+      final harness = _makeHarness();
+      when(
+        () => harness.getList.call(
+          limit: any(named: 'limit'),
+          offset: any(named: 'offset'),
+        ),
+      ).thenAnswer((_) async => const Err(ServerFailure()));
+      final analytics = RecordingAnalytics();
+
+      await _pumpScreen(tester, harness: harness, analytics: analytics);
+      await tester.pumpAndSettle();
+      await tester.pump();
+
+      expect(analytics.named('error_shown').single.parameters, {
+        'te_code': 'TE-07',
+        'screen': 'pokemon_list',
+      });
+    });
+
+    testWidgets('stale-cache banner emits error_shown TE-02', (tester) async {
+      final harness = _makeHarness(firstPage: _page(1, 3));
+      final analytics = RecordingAnalytics();
+      await _pumpScreen(tester, harness: harness, analytics: analytics);
+      await tester.pumpAndSettle();
+
+      when(
+        () => harness.getList.call(
+          limit: any(named: 'limit'),
+          offset: any(named: 'offset'),
+        ),
+      ).thenAnswer((_) async => const Err(NetworkFailure()));
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(PokemonListScreen)),
+      );
+      await container.read(pokemonListViewModelProvider.notifier).refresh();
+      await tester.pumpAndSettle();
+
+      final shown = analytics.named('error_shown');
+      expect(shown, hasLength(1));
+      expect(shown.single.parameters, {
+        'te_code': 'TE-02',
+        'screen': 'pokemon_list',
+      });
+    });
   });
 
   // Closes the "screen-level wiring from icon buttons to sheet openers is

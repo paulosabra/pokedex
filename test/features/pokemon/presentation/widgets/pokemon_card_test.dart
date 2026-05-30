@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:pokedex/core/observability/observability_providers.dart';
 import 'package:pokedex/core/pokemon/pokemon_type_id.dart';
 import 'package:pokedex/core/ui/components/pokemon_card.dart' as core;
 import 'package:pokedex/core/ui/components/shimmer_box.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 import 'package:pokedex/features/pokemon/presentation/widgets/pokemon_card.dart';
+
+import '../../../../helpers/recording_observability.dart';
 
 const _bulbasaur = Pokemon(
   id: 1,
@@ -33,7 +37,11 @@ const _skeleton = Pokemon(
   generationId: 4,
 );
 
-Future<GoRouter> _pump(WidgetTester tester, Pokemon pokemon) async {
+Future<GoRouter> _pump(
+  WidgetTester tester,
+  Pokemon pokemon, {
+  RecordingAnalytics? analytics,
+}) async {
   String? lastVisited;
   final router = GoRouter(
     routes: [
@@ -52,7 +60,15 @@ Future<GoRouter> _pump(WidgetTester tester, Pokemon pokemon) async {
       ),
     ],
   );
-  await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        if (analytics != null)
+          analyticsServiceProvider.overrideWithValue(analytics),
+      ],
+      child: MaterialApp.router(routerConfig: router),
+    ),
+  );
   // Expose the captured route via a side-channel state field on the router's
   // GoRouterState — tests read it back below.
   addTearDown(router.dispose);
@@ -115,6 +131,20 @@ void main() {
         expect(_lastVisited[router]!(), '/pokemon/1');
       },
     );
+
+    testWidgets('tap logs pokemon_opened with id + primary_type', (
+      tester,
+    ) async {
+      final analytics = RecordingAnalytics();
+      await _pump(tester, _bulbasaur, analytics: analytics);
+
+      await tester.tap(find.byType(core.PokemonCard));
+      await tester.pumpAndSettle();
+
+      final opened = analytics.named('pokemon_opened');
+      expect(opened, hasLength(1));
+      expect(opened.single.parameters, {'id': 1, 'primary_type': 'grass'});
+    });
   });
 
   group('PokemonCard adapter — skeleton variant', () {
@@ -163,6 +193,24 @@ void main() {
 
         expect(router.canPop(), isTrue);
         expect(_lastVisited[router]!(), '/pokemon/445');
+      },
+    );
+
+    testWidgets(
+      'skeleton tap logs pokemon_opened with unknown primary_type',
+      (tester) async {
+        final analytics = RecordingAnalytics();
+        await _pump(tester, _skeleton, analytics: analytics);
+
+        await tester.tap(find.text('Garchomp'));
+        await tester.pumpAndSettle();
+
+        final opened = analytics.named('pokemon_opened');
+        expect(opened, hasLength(1));
+        expect(
+          opened.single.parameters,
+          {'id': 445, 'primary_type': 'unknown'},
+        );
       },
     );
   });

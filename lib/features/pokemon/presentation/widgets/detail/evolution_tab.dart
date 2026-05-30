@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,6 +7,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pokedex/app/theme/app_colors.dart';
 import 'package:pokedex/app/theme/app_typography.dart';
+import 'package:pokedex/core/observability/analytics_event.dart';
+import 'package:pokedex/core/observability/observability_providers.dart';
 import 'package:pokedex/core/utils/string_utils.dart';
 import 'package:pokedex/features/pokemon/domain/entities/evolution_chain.dart';
 import 'package:pokedex/features/pokemon/presentation/view_models/pokemon_evolution_provider.dart';
@@ -59,6 +63,7 @@ class EvolutionTab extends ConsumerWidget {
                     _EvolutionRow(
                       parent: pairs[i].$1,
                       child: pairs[i].$2,
+                      sourceId: id,
                     ),
                   ],
                 ],
@@ -98,12 +103,19 @@ class EvolutionTab extends ConsumerWidget {
 /// width while the connector flexes — so the layout adapts to the available
 /// width without ever shifting the cards off-axis between rows.
 class _EvolutionRow extends StatelessWidget {
-  const _EvolutionRow({required this.parent, required this.child});
+  const _EvolutionRow({
+    required this.parent,
+    required this.child,
+    required this.sourceId,
+  });
 
   static const double _cardWidth = 100;
 
   final EvolutionStage parent;
   final EvolutionNode child;
+
+  /// The currently-viewed Pokémon — the `source_id` of any navigation tap.
+  final int sourceId;
 
   @override
   Widget build(BuildContext context) {
@@ -111,12 +123,12 @@ class _EvolutionRow extends StatelessWidget {
       children: [
         SizedBox(
           width: _cardWidth,
-          child: _StageCard(stage: parent),
+          child: _StageCard(stage: parent, sourceId: sourceId),
         ),
         Expanded(child: _Connector(condition: child.stage.condition)),
         SizedBox(
           width: _cardWidth,
-          child: _StageCard(stage: child.stage),
+          child: _StageCard(stage: child.stage, sourceId: sourceId),
         ),
       ],
     );
@@ -152,8 +164,8 @@ class _Connector extends StatelessWidget {
   }
 }
 
-class _StageCard extends StatelessWidget {
-  const _StageCard({required this.stage});
+class _StageCard extends ConsumerWidget {
+  const _StageCard({required this.stage, required this.sourceId});
 
   /// Pokéball silhouette diameter — matches the row's card slot width.
   static const double _backgroundSize = 100;
@@ -167,10 +179,22 @@ class _StageCard extends StatelessWidget {
 
   final EvolutionStage stage;
 
+  /// The currently-viewed Pokémon — the `source_id` of this navigation tap.
+  final int sourceId;
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return InkWell(
-      onTap: () => context.push('/pokemon/${stage.id}'),
+      onTap: () {
+        // PRD §12 `evolution_navigated`: from the viewed Pokémon to the tapped
+        // stage, then navigate.
+        ref
+            .read(analyticsServiceProvider)
+            .logEvent(
+              EvolutionNavigated(sourceId: sourceId, destId: stage.id),
+            );
+        unawaited(context.push('/pokemon/${stage.id}'));
+      },
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

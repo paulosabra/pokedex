@@ -8,12 +8,17 @@ import 'package:pokedex/core/ui/states/state_view.dart';
 /// failure types get their own widget when the recovery flow differs (e.g.
 /// the offline-error widget gives no retry hope when the device itself is
 /// offline with no cache).
-class GenericErrorWidget extends StatelessWidget {
+///
+/// [onShown] fires exactly once, on first mount — the caller wires it to the
+/// `error_shown` analytics event (plan §4.3), keeping this design-system widget
+/// free of any observability dependency.
+class GenericErrorWidget extends StatefulWidget {
   /// Creates a [GenericErrorWidget].
   const GenericErrorWidget({
     required this.onRetry,
     this.message = 'Something went wrong. Please try again.',
     this.retryLabel = 'Retry',
+    this.onShown,
     super.key,
   });
 
@@ -27,14 +32,28 @@ class GenericErrorWidget extends StatelessWidget {
   /// Fires on the CTA tap.
   final VoidCallback onRetry;
 
+  /// Fired once on first mount so the caller can emit `error_shown` (§4.3).
+  final VoidCallback? onShown;
+
+  @override
+  State<GenericErrorWidget> createState() => _GenericErrorWidgetState();
+}
+
+class _GenericErrorWidgetState extends State<GenericErrorWidget> {
+  @override
+  void initState() {
+    super.initState();
+    widget.onShown?.call();
+  }
+
   @override
   Widget build(BuildContext context) {
     return StateView(
       glyph: Icons.error_outline,
       title: 'Something went wrong',
-      body: message,
-      actionLabel: retryLabel,
-      onAction: onRetry,
+      body: widget.message,
+      actionLabel: widget.retryLabel,
+      onAction: widget.onRetry,
     );
   }
 }

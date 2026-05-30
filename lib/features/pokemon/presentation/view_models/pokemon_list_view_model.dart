@@ -1,12 +1,17 @@
 import 'dart:async';
 
+import 'package:pokedex/core/error/failure.dart';
 import 'package:pokedex/core/error/result.dart';
+import 'package:pokedex/core/observability/analytics_event.dart';
+import 'package:pokedex/core/observability/analytics_service.dart';
+import 'package:pokedex/core/observability/observability_providers.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/entities/pokemon_filter.dart';
 import 'package:pokedex/features/pokemon/domain/entities/sort_criteria.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/find_pokemon.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/get_pokemon_list.dart';
 import 'package:pokedex/features/pokemon/domain/usecases/watch_pokemon_list.dart';
+import 'package:pokedex/features/pokemon/presentation/analytics/error_te_code.dart';
 import 'package:pokedex/features/pokemon/presentation/coordinators/backfill_coordinator.dart';
 import 'package:pokedex/features/pokemon/presentation/coordinators/index_coordinator.dart';
 import 'package:pokedex/features/pokemon/presentation/state/pokemon_list_state.dart';
@@ -35,6 +40,9 @@ class PokemonListViewModel extends _$PokemonListViewModel {
   static const Duration _searchDebounce = Duration(milliseconds: 300);
   static const int _maxQueryLength = 50;
 
+  /// `screen` property attached to every analytics event from the Home list.
+  static const String _screen = 'pokemon_list';
+
   Timer? _debounce;
   StreamSubscription<List<Pokemon>>? _streamSub;
 
@@ -42,6 +50,17 @@ class PokemonListViewModel extends _$PokemonListViewModel {
   /// that a newer transition has already overtaken it (so it skips its state
   /// update). Incremented on entry to every `_enterDiscovery` call.
   int _discoverySeq = 0;
+
+  /// The product-analytics sink (defaults to no-op under tests / before
+  /// `bootstrap()` wires the real fan-out).
+  AnalyticsService get _analytics => ref.read(analyticsServiceProvider);
+
+  /// Reports a gracefully-handled [failure] to the crash sink, tagged with its
+  /// PRD TE code, so a swallowed `Err` (loadMore) or a stale-cache refresh
+  /// failure stays observable rather than vanishing silently (§4.3).
+  void _reportFailure(Failure failure) => ref
+      .read(errorReporterProvider)
+      .captureError(failure, StackTrace.current, failure: failure);
 
   @override
   Future<PokemonListState> build() async {
@@ -52,6 +71,13 @@ class PokemonListViewModel extends _$PokemonListViewModel {
     });
 
     final initial = await _loadFirstPage();
+    // PRD §12 `list_viewed`: the very first data render is a cold view (the
+    // app just launched). Re-entries to browse are reported as warm by
+    // [_enterBrowse]. A failed first page throws above, so this only fires on
+    // a successful render.
+    _analytics.logEvent(
+      ListViewed(origin: ListOrigin.cold, count: initial.items.length),
+    );
     _subscribeBrowseStream(sort: SortCriteria.numberAsc);
     // Page-0 is back in the UI — sequence the index fetch and the paced
     // detail backfill behind the same connection pool, matching the plan's
@@ -92,9 +118,15 @@ class PokemonListViewModel extends _$PokemonListViewModel {
             isLoadingMore: false,
           ),
         );
-      case Err():
+      case Err(:final failure):
         // No dedicated loadMore-error field in the state shape; swallow so the
         // existing items stay readable and a subsequent refresh can recover.
+        // The failure was formerly invisible — report it and emit `error_shown`
+        // so the swallowed pagination error is still observable (§4.3).
+        _reportFailure(failure);
+        _analytics.logEvent(
+          ErrorShown(teCode: teCodeFor(failure), screen: _screen),
+        );
         state = AsyncData(after.copyWith(isLoadingMore: false));
     }
   }
@@ -124,6 +156,15 @@ class PokemonListViewModel extends _$PokemonListViewModel {
     final current = state.value;
     if (current == null || current.filter == filter) return;
     state = AsyncData(current.copyWith(filter: filter));
+    // PRD §12 `filter_applied`: presence flags only — never the filter values
+    // (RNF-09). A cleared filter (`null`) reports all-false.
+    _analytics.logEvent(
+      FilterApplied(
+        hasType: filter?.types.isNotEmpty ?? false,
+        hasWeakness: filter?.weaknesses.isNotEmpty ?? false,
+        hasHeight: filter?.height != null,
+      ),
+    );
     _applyMode();
   }
 
@@ -135,6 +176,8 @@ class PokemonListViewModel extends _$PokemonListViewModel {
     final current = state.value;
     if (current == null || current.sort == sort) return;
     state = AsyncData(current.copyWith(sort: sort));
+    // PRD §12 `sort_changed`: the new criterion's enum name.
+    _analytics.logEvent(SortChanged(criteria: sort.name));
     _applyMode();
   }
 
@@ -146,6 +189,11 @@ class PokemonListViewModel extends _$PokemonListViewModel {
     final current = state.value;
     if (current == null || current.generationId == id) return;
     state = AsyncData(current.copyWith(generationId: id));
+    // PRD §12 `generation_selected`: only a positive selection is an event;
+    // clearing the generation (`null`) is not.
+    if (id != null) {
+      _analytics.logEvent(GenerationSelected(generation: id));
+    }
     _applyMode();
   }
 
@@ -186,6 +234,9 @@ class PokemonListViewModel extends _$PokemonListViewModel {
       if (next == null) return;
       switch (findResult) {
         case Ok(:final value):
+          // A page failure still surfaces as the stale-cache banner (TE-02) —
+          // report it so the handled failure stays observable (§4.3).
+          if (pageFailure != null) _reportFailure(pageFailure);
           state = AsyncData(
             next.copyWith(
               items: value,
@@ -197,6 +248,7 @@ class PokemonListViewModel extends _$PokemonListViewModel {
             ),
           );
         case Err(:final failure):
+          _reportFailure(failure);
           state = AsyncData(
             next.copyWith(
               isLoadingMore: false,
@@ -220,6 +272,9 @@ class PokemonListViewModel extends _$PokemonListViewModel {
           ),
         );
       case Err(:final failure):
+        // Browse refresh failed but cached items stay visible behind the
+        // stale-cache banner (TE-02) — report the handled failure (§4.3).
+        _reportFailure(failure);
         state = AsyncData(
           after.copyWith(
             isLoadingMore: false,
@@ -291,6 +346,13 @@ class PokemonListViewModel extends _$PokemonListViewModel {
     final latest = state.value ?? current;
     switch (result) {
       case Ok(:final value):
+        // PRD §12 `search_performed`: a search resolved. Report only the
+        // result count (RNF-09 — never the term). Fires only when a query is
+        // active, so a filter/sort/generation-only discovery does not count
+        // as a search.
+        if (current.query.isNotEmpty) {
+          _analytics.logEvent(SearchPerformed(resultCount: value.length));
+        }
         state = AsyncData(
           latest.copyWith(
             items: value,
@@ -301,6 +363,7 @@ class PokemonListViewModel extends _$PokemonListViewModel {
           ),
         );
       case Err(:final failure):
+        _reportFailure(failure);
         final error = AsyncError<PokemonListState>(
           failure,
           StackTrace.current,
@@ -314,6 +377,11 @@ class PokemonListViewModel extends _$PokemonListViewModel {
   void _enterBrowse() {
     final current = state.value;
     if (current == null) return;
+    // PRD §12 `list_viewed`: returning to the full browse list after clearing
+    // every discovery axis — a warm view (data is already cached).
+    _analytics.logEvent(
+      ListViewed(origin: ListOrigin.warm, count: current.items.length),
+    );
     // Discovery left `hasMore: false` (findPokemon is unpaginated). Restore
     // it before the browse stream's first event so `loadMore` is unblocked
     // in the race window.

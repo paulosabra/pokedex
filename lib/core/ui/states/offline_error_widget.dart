@@ -7,7 +7,13 @@ import 'package:pokedex/core/ui/states/state_view.dart';
 /// data to fall back on, so the screen surfaces this widget instead of any
 /// list/detail body. The CTA fires [onRetry], which the caller wires to the
 /// view-model's refresh intent.
-class OfflineErrorWidget extends StatelessWidget {
+///
+/// [onShown] fires exactly once, when the widget first mounts — the caller
+/// wires it to the `error_shown` analytics event (plan §4.3). It lives here
+/// (rather than logging directly) so the design-system widget stays free of
+/// any observability dependency: the caller, which knows the screen and TE
+/// code, owns the emission.
+class OfflineErrorWidget extends StatefulWidget {
   /// Creates an [OfflineErrorWidget].
   const OfflineErrorWidget({
     required this.onRetry,
@@ -15,6 +21,7 @@ class OfflineErrorWidget extends StatelessWidget {
         "You're offline and no Pokémon are cached. "
         'Check your connection and try again.',
     this.retryLabel = 'Retry',
+    this.onShown,
     super.key,
   });
 
@@ -32,14 +39,28 @@ class OfflineErrorWidget extends StatelessWidget {
   /// the detail screen wires it to `context.pop()` instead.
   final VoidCallback onRetry;
 
+  /// Fired once on first mount so the caller can emit `error_shown` (§4.3).
+  final VoidCallback? onShown;
+
+  @override
+  State<OfflineErrorWidget> createState() => _OfflineErrorWidgetState();
+}
+
+class _OfflineErrorWidgetState extends State<OfflineErrorWidget> {
+  @override
+  void initState() {
+    super.initState();
+    widget.onShown?.call();
+  }
+
   @override
   Widget build(BuildContext context) {
     return StateView(
       glyph: Icons.cloud_off,
       title: "You're offline",
-      body: message,
-      actionLabel: retryLabel,
-      onAction: onRetry,
+      body: widget.message,
+      actionLabel: widget.retryLabel,
+      onAction: widget.onRetry,
     );
   }
 }
