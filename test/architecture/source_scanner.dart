@@ -52,14 +52,28 @@ List<SourceFile> scanDart(String path) {
 bool pathExists(String path) =>
     FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound;
 
-final _directive = RegExp(
-  r'''^\s*(?:import|export)\s+r?(['"])(.+?)\1''',
-  multiLine: true,
+final _headerDirective = RegExp(
+  r'''\s*(?:(?:import|export)\b([^;]*)|(?:library|part)\b[^;]*);''',
 );
+final _quotedUri = RegExp(r'''r?(['"])(.+?)\1''');
 
-List<String> extractImports(String code) => [
-  for (final m in _directive.allMatches(code)) m.group(2)!,
-];
+/// Every URI of the `import`/`export` directives, including conditional ones.
+///
+/// Directives can only appear in the file header, so scanning stops at the
+/// first declaration and string literals in the body never count.
+List<String> extractImports(String code) {
+  final uris = <String>[];
+  var offset = 0;
+  while (true) {
+    final directive = _headerDirective.matchAsPrefix(code, offset);
+    if (directive == null) return uris;
+    final body = directive.group(1);
+    if (body != null) {
+      uris.addAll(_quotedUri.allMatches(body).map((m) => m.group(2)!));
+    }
+    offset = directive.end;
+  }
+}
 
 /// Maps `package:pokedex/x.dart` and relative URIs to `lib/x.dart`.
 String resolveImport(String fromPath, String uri) {
