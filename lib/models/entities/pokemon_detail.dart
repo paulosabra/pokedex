@@ -15,8 +15,7 @@ final class PokemonDetail {
     required List<String> abilities,
     required Map<StatKind, int> stats,
     this.description,
-  }) : assert(types.isNotEmpty, 'types must not be empty (ParsingFailure)'),
-       types = List.unmodifiable(types),
+  }) : types = List.unmodifiable(_requireNonEmpty(types)),
        abilities = List.unmodifiable(abilities),
        stats = Map.unmodifiable(stats);
 
@@ -88,6 +87,12 @@ final class PokemonDetail {
   @override
   String toString() => 'PokemonDetail($id, $name)';
 }
+
+/// Enforced in release too, so a bad payload fails at construction (where the
+/// mapper turns it into `ParsingFailure`) instead of later in `primaryType`.
+List<PokemonType> _requireNonEmpty(List<PokemonType> types) => types.isEmpty
+    ? throw ArgumentError.value(types, 'types', 'must not be empty')
+    : types;
 
 bool _listEquals<T>(List<T> a, List<T> b) {
   if (a.length != b.length) return false;

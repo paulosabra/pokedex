@@ -26,6 +26,21 @@ void main() {
       expect(() => detail.stats[StatKind.speed] = 1, throwsUnsupportedError);
     });
 
+    test('rejects empty types', () {
+      expect(
+        () => PokemonDetail(
+          id: 1,
+          name: 'bulbasaur',
+          types: const [],
+          weightHg: null,
+          heightDm: null,
+          abilities: const [],
+          stats: const {},
+        ),
+        throwsArgumentError,
+      );
+    });
+
     test('later changes to the source collections do not leak in', () {
       final types = [PokemonType.grass];
       final abilities = ['overgrow'];
