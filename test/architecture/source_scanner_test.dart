@@ -75,6 +75,55 @@ import 'package:flutter/widgets.dart';
       expect(file.imports, ['package:flutter/widgets.dart']);
     });
 
+    test('includes every URI of a conditional import', () {
+      final file = _file('''
+import 'stub.dart'
+    if (dart.library.io) 'package:sqflite/sqflite.dart'
+    if (dart.library.js_interop) 'web.dart';
+''');
+
+      expect(file.imports, [
+        'lib/views/a/stub.dart',
+        'package:sqflite/sqflite.dart',
+        'lib/views/a/web.dart',
+      ]);
+    });
+
+    test(
+      'keeps scanning past metadata, semicolons and escaped quotes in URIs',
+      () {
+        final file = _file('''
+@Deprecated('use (b)')
+library;
+
+@Deprecated('old')
+import 'odd;name.dart';
+import 'it\\'s.dart';
+import 'package:sqflite/sqflite.dart';
+''');
+
+        expect(file.imports, [
+          'lib/views/a/odd;name.dart',
+          r"lib/views/a/it\'s.dart",
+          'package:sqflite/sqflite.dart',
+        ]);
+      },
+    );
+
+    test('ignores import-like lines in string literals after the header', () {
+      final file = _file('''
+library;
+
+import 'package:flutter/widgets.dart' show Text;
+
+const sample = """
+import 'package:sqflite/sqflite.dart';
+""";
+''');
+
+      expect(file.imports, ['package:flutter/widgets.dart']);
+    });
+
     test('resolves package:pokedex and relative URIs to lib/ paths', () {
       final file = _file('''
 import 'package:pokedex/core/errors/result.dart';
