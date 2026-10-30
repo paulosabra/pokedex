@@ -84,6 +84,27 @@ void main() {
 
         expect(requested, [Uri.parse('http://localhost:8080/v2/pokemon/25')]);
       });
+
+      test(
+        'keeps the last segment of a baseUrl without trailing slash',
+        () async {
+          final custom = PokeApiClient(
+            httpClient: MockClient((request) async {
+              requested.add(request.url);
+              return _json('{}');
+            }),
+            baseUrl: Uri.parse('http://localhost:8080/api/v2'),
+          );
+
+          await custom.fetchIndex();
+
+          expect(requested, [
+            Uri.parse(
+              'http://localhost:8080/api/v2/pokemon?limit=151&offset=0',
+            ),
+          ]);
+        },
+      );
     });
 
     group('PRD §10.2 status mapping', () {

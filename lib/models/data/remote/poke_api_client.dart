@@ -35,7 +35,7 @@ class PokeApiClient {
     Uri? baseUrl,
     this._timeout = const Duration(seconds: 10),
   }) : _http = httpClient,
-       _baseUrl = baseUrl ?? Endpoints.baseUrl;
+       _baseUrl = _asDirectory(baseUrl ?? Endpoints.baseUrl);
 
   /// PRD §11.4: at most this much of a body reaches the logs.
   static const logSnippetLength = 200;
@@ -151,6 +151,10 @@ class PokeApiClient {
       );
     }
   }
+
+  /// `Uri.resolve` replaces the last segment unless the path ends in `/`.
+  static Uri _asDirectory(Uri base) =>
+      base.path.endsWith('/') ? base : base.replace(path: '${base.path}/');
 
   static String _snippet(List<int> bytes) {
     final body = utf8.decode(bytes, allowMalformed: true);
