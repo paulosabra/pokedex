@@ -52,8 +52,19 @@ List<SourceFile> scanDart(String path) {
 bool pathExists(String path) =>
     FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound;
 
+const _stringLiteral = r'''r?(?:'[^']*'|"[^"]*")''';
 final _headerDirective = RegExp(
-  r'''\s*(?:(?:import|export)\b([^;]*)|(?:library|part)\b[^;]*);''',
+  [
+    r'\s*(?:',
+    // Metadata, e.g. `@Deprecated('x')`, may precede any directive.
+    r'@[\w.]+(?:\((?:',
+    _stringLiteral,
+    r'''|[^()'"])*\))?''',
+    r'|(?:(import|export)|library|part)\b((?:',
+    _stringLiteral,
+    r'''|[^;'"])*);''',
+    ')',
+  ].join(),
 );
 final _quotedUri = RegExp(r'''r?(['"])(.+?)\1''');
 
@@ -67,8 +78,8 @@ List<String> extractImports(String code) {
   while (true) {
     final directive = _headerDirective.matchAsPrefix(code, offset);
     if (directive == null) return uris;
-    final body = directive.group(1);
-    if (body != null) {
+    final body = directive.group(2);
+    if (directive.group(1) != null && body != null) {
       uris.addAll(_quotedUri.allMatches(body).map((m) => m.group(2)!));
     }
     offset = directive.end;

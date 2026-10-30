@@ -89,6 +89,22 @@ import 'stub.dart'
       ]);
     });
 
+    test('keeps scanning past metadata and semicolons inside URIs', () {
+      final file = _file('''
+@Deprecated('use (b)')
+library;
+
+@Deprecated('old')
+import 'odd;name.dart';
+import 'package:sqflite/sqflite.dart';
+''');
+
+      expect(file.imports, [
+        'lib/views/a/odd;name.dart',
+        'package:sqflite/sqflite.dart',
+      ]);
+    });
+
     test('ignores import-like lines in string literals after the header', () {
       final file = _file('''
 library;
