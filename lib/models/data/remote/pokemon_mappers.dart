@@ -19,15 +19,17 @@ abstract final class PokemonMappers {
   static const maxAbilities = 2;
 
   /// RN-01: the id is the last numeric segment of `url`; entries without
-  /// one are dropped with a WARNING.
+  /// an id or a name are dropped with a WARNING instead of failing the list.
   static List<PokemonSummary> index(JsonMap json) {
     final summaries = <PokemonSummary>[];
     for (final entry in (json['results'] as List<Object?>).cast<JsonMap>()) {
-      final name = entry['name'] as String;
+      final name = entry['name'] as String?;
       final url = entry['url'] as String?;
       final id = _idFromUrl(url);
-      if (id == null) {
-        _log.warning('index entry dropped: no id {name=$name, url=$url}');
+      if (id == null || name == null) {
+        _log.warning(
+          'index entry dropped: no id or name {name=$name, url=$url}',
+        );
         continue;
       }
       summaries.add(PokemonSummary(id: id, name: name));

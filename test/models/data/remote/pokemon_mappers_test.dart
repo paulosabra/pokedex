@@ -31,7 +31,7 @@ void main() {
         expect(index.last.name, 'mew');
       });
 
-      test('RN-01 drops entries without an id with a WARNING', () {
+      test('RN-01 drops entries without an id or name with a WARNING', () {
         final logs = LogRecorder();
         final json = {
           'results': [
@@ -41,6 +41,7 @@ void main() {
             },
             {'name': 'broken', 'url': 'https://pokeapi.co/api/v2/pokemon/x/'},
             {'name': 'nourl'},
+            {'url': 'https://pokeapi.co/api/v2/pokemon/3/'},
             {'name': 'ivysaur', 'url': 'https://pokeapi.co/api/v2/pokemon/2'},
           ],
         };
@@ -51,12 +52,17 @@ void main() {
         logs.expectLog(
           Level.WARNING,
           LoggerNames.repository,
-          'index entry dropped: no id {name=broken',
+          'index entry dropped: no id or name {name=broken',
         );
         logs.expectLog(
           Level.WARNING,
           LoggerNames.repository,
-          'index entry dropped: no id {name=nourl, url=null}',
+          'index entry dropped: no id or name {name=nourl, url=null}',
+        );
+        logs.expectLog(
+          Level.WARNING,
+          LoggerNames.repository,
+          'index entry dropped: no id or name {name=null, url=https://pokeapi.co/api/v2/pokemon/3/}',
         );
       });
 
