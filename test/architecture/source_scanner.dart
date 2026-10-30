@@ -52,7 +52,7 @@ List<SourceFile> scanDart(String path) {
 bool pathExists(String path) =>
     FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound;
 
-const _stringLiteral = r'''r?(?:'[^']*'|"[^"]*")''';
+const _stringLiteral = r'''r?(?:'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")''';
 final _headerDirective = RegExp(
   [
     r'\s*(?:',
@@ -66,7 +66,7 @@ final _headerDirective = RegExp(
     ')',
   ].join(),
 );
-final _quotedUri = RegExp(r'''r?(['"])(.+?)\1''');
+final _quotedUri = RegExp(r'''r?(?:'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)")''');
 
 /// Every URI of the `import`/`export` directives, including conditional ones.
 ///
@@ -80,7 +80,9 @@ List<String> extractImports(String code) {
     if (directive == null) return uris;
     final body = directive.group(2);
     if (directive.group(1) != null && body != null) {
-      uris.addAll(_quotedUri.allMatches(body).map((m) => m.group(2)!));
+      uris.addAll(
+        _quotedUri.allMatches(body).map((m) => m.group(1) ?? m.group(2)!),
+      );
     }
     offset = directive.end;
   }
