@@ -7,8 +7,9 @@ import 'package:flutter_test/flutter_test.dart';
 Map<String, Set<String>> parsePubspecSections(String pubspec) {
   final sections = <String, Set<String>>{};
   final topLevel = RegExp(r'^([A-Za-z_]\w*):');
-  final entry = RegExp(r'^  ([A-Za-z_]\w*):');
+  final entry = RegExp(r'^( +)([A-Za-z_]\w*):');
   String? current;
+  int? entryIndent;
   for (final line in pubspec.split('\n')) {
     final withoutComment = line.split('#').first.trimRight();
     if (withoutComment.isEmpty) continue;
@@ -16,12 +17,14 @@ Map<String, Set<String>> parsePubspecSections(String pubspec) {
     if (section != null) {
       current = section.group(1);
       sections[current!] = {};
+      entryIndent = null;
       continue;
     }
     final package = entry.firstMatch(withoutComment);
-    if (current != null && package != null) {
-      sections[current]!.add(package.group(1)!);
-    }
+    if (current == null || package == null) continue;
+    final indent = package.group(1)!.length;
+    entryIndent ??= indent;
+    if (indent == entryIndent) sections[current]!.add(package.group(2)!);
   }
   return sections;
 }
@@ -46,6 +49,22 @@ dev_dependencies:
       expect(sections['dependencies'], {'flutter', 'http'});
       expect(sections['dev_dependencies'], {'flutter_test'});
     });
+  });
+
+  test('parsePubspecSections follows any consistent indentation', () {
+    const pubspec = '''
+dependencies:
+    flutter:
+        sdk: flutter
+    http: ^1.0.0
+dev_dependencies:
+    mockito: ^5.0.0
+''';
+
+    final sections = parsePubspecSections(pubspec);
+
+    expect(sections['dependencies'], {'flutter', 'http'});
+    expect(sections['dev_dependencies'], {'mockito'});
   });
 
   group('pubspec.yaml (RNF-07, Tech Spec §11)', () {
